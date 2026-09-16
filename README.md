@@ -66,6 +66,7 @@ Your personal manager is on duty 24/7 — **before, during, and after every code
 [![Phase](https://img.shields.io/badge/status-v0.7.13%20production--ready-success)](https://github.com/hellob1889/Pandaone-AI-Agent/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hellob1889/Pandaone-AI-Agent/audit.yml?branch=main&label=CI&logo=github)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/audit.yml)
 [![Lint](https://img.shields.io/github/actions/workflow/status/hellob1889/Pandaone-AI-Agent/lint.yml?branch=main&label=Lint&logo=github)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/lint.yml)
+[![M8ven Trust](https://img.shields.io/badge/M8ven_Trust-A_96%2F100_%E2%9C%93_Live_Monitored-success?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSI4MCIgZm9udC1zaXplPSI4MCI+8J%2bRjzwvdGV4dD48L3N2Zz4=)](https://m8ven.ai/mcp/hellob1889/pandaone-ai-agent)
 
 [English](#english) | [中文](#中文)
 
