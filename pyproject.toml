@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pandaone-guard"
-version = "0.7.13"
+version = "0.7.14"
 description = "AI Agent code audit gateway (Pandaone AI Agent) - OS-level mandatory review of every code change"
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
