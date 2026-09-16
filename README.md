@@ -8,6 +8,12 @@
   <img src="assets/icon-github.svg" alt="Pandaone Logo" width="96" height="96"/>
 </p>
 
+<p align="center">
+  <img src="assets/terminal-write.png" alt="pandaone write — AI Agent reports to Pandaone first" width="900"/>
+  <br/>
+  <em>AI Agent 通过 <code>pandaone write</code> 提交审计 → Pandaone 签发带签名的合规凭证 → 写入完成</em>
+</p>
+
 ## 🧑‍💼 Pandaone is your codebase's personal manager. / Pandaone 是你代码库的专属经理。
 
 Every AI agent is an employee working in your company — your codebase. Without a personal manager, employees do what they want — edit files, push commits, break production — and you have no idea what they did, when, or why.
@@ -60,10 +66,10 @@ Your personal manager is on duty 24/7 — **before, during, and after every code
 [![License](https://img.shields.io/pypi/l/pandaone-guard)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/LICENSE)
 [![Tests](https://img.shields.io/badge/tests-342%20passed-brightgreen)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/audit.yml)
 [![Bugs](https://img.shields.io/badge/bugs-28%20fixed%20(v0.7.1)-success)](https://github.com/hellob1889/Pandaone-AI-Agent/releases/tag/v0.7.1)
-[![i18n](https://img.shields.io/badge/i18n-295%20keys%20zh%20%E2%89%88%20en-blueviolet)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/src/pandaone/i18n.py)
+[![i18n](https://img.shields.io/badge/i18n-248%20keys%20zh%2Den%20%E2%89%88%20en-blueviolet)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/src/pandaone/i18n.py)
 [![Lint & i18n CI](https://img.shields.io/badge/Lint%20%26%20i18n-passing-success)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/.github/workflows/lint.yml)
 [![OS](https://img.shields.io/badge/OS-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://pypi.org/project/pandaone-guard/)
-[![Phase](https://img.shields.io/badge/status-v0.7.13%20production--ready-success)](https://github.com/hellob1889/Pandaone-AI-Agent/releases)
+[![Phase](https://img.shields.io/badge/status-v0.7.3%20production--ready-success)](https://github.com/hellob1889/Pandaone-AI-Agent/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/hellob1889/Pandaone-AI-Agent/audit.yml?branch=main&label=CI&logo=github)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/audit.yml)
 [![Lint](https://img.shields.io/github/actions/workflow/status/hellob1889/Pandaone-AI-Agent/lint.yml?branch=main&label=Lint&logo=github)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/lint.yml)
 [![M8ven Score](https://m8ven.ai/badge/mcp/hellob1889/pandaone-ai-agent)](https://m8ven.ai/mcp/hellob1889/pandaone-ai-agent)
@@ -98,36 +104,35 @@ Pandaone 是一个 **7 层防御体系**，强制 AI Agent（或任何开发者�
 
 #### 安装 / Installation
 
-**推荐：一键硬隔离安装（v0.7.11+；v0.7.13 零前置，新电脑不用装 Python）**
-
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/hellob1889/Pandaone-AI-Agent/main/install.ps1 | iex
-```
-
-```bash
-# macOS / Linux
-curl -sSL https://raw.githubusercontent.com/hellob1889/Pandaone-AI-Agent/main/install.sh | bash
-```
-
-**自动做的事 / Auto-handles**：
-1. 检测 Python ≥ 3.8（Windows 没装 → 自动下载嵌入式 Python 3.12，**无管理员**）
-2. 检测 git（没装 → 打印平台特定安装命令）
-3. 创建硬隔离 venv（不污染系统 site-packages）
-4. 从 GitHub Release 拉最新 wheel + SHA256 校验
-5. 装 pandaone + 加 PATH
-6. **自动跑 `pandaone install-context`**（Windows 右键菜单）
-7. **自动跑 `pandaone install-hook`**（git pre-commit hook，cwd 是 git repo 时）
-
-详见 [完整安装说明](docs/zh/install.md) · [Full Install Guide](docs/en/install.md)。
-
-**备选：传统 pip 安装**
+**方式 A：从 PyPI 安装（最简单）**
 
 ```bash
 pip install pandaone-guard
-pandaone install-context   # Windows 右键菜单
-pandaone install-hook      # git pre-commit hook
+
+# 一键装上右键菜单（Windows / macOS / Linux 自动检测）
+pandaone install-context
 ```
+
+**方式 B：从源码一键安装（推荐开发者使用，含最新 i18n + CI lint）**
+
+```bash
+git clone https://github.com/hellob1889/Pandaone-AI-Agent.git
+cd pandaone
+
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+
+# macOS / Linux
+./scripts/install.sh
+```
+
+**安装脚本自动做 / Install script auto-handles**：
+1. 检测 Python ≥ 3.10
+2. 探测 git（不在 PATH 时尝试常见安装路径）
+3. 卸载 site-packages 里可能存在的老 pandaone 版本（避免版本冲突）
+4. `pip install -e .` 本地源码 editable 安装
+5. 验证 pandaone 可用（`python -m pandaone --version`）
+6. 调用 `doctor.py --fix --persist-path` 自动修复剩余问题（依赖、setuptools、指纹、PATH 持久化到 HKCU）
 
 #### 环境诊断（任何时候都能跑）/ Environment Diagnostics (run anytime)
 
@@ -184,6 +189,12 @@ pandaone write \
 
 #### 查看审计日志 / View Audit Log
 
+<p align="center">
+  <img src="assets/terminal-log.png" alt="pandaone log — Audit history" width="900"/>
+  <br/>
+  <em>审计历史：每条变更带 reason / problem / approach 三段式凭证</em>
+</p>
+
 ```bash
 # 命令行查看
 pandaone log --last 10
@@ -203,8 +214,26 @@ pandaone log --format pdf --output audit_report.pdf
 pandaone status --root .
 ```
 
+<p align="center">
+  <img src="assets/terminal-status.png" alt="pandaone status — Project dashboard" width="900"/>
+  <br/>
+  <em>终端版：项目状态 + 最近审计表（CLI 一行命令）</em>
+</p>
+
 显示 / Displays：项目路径、配置摘要、L1 锁定状态、二进制快照、最近审计、版本指纹等。
 Project path, configuration summary, L1 lock state, binary snapshots, recent audits, version fingerprints, etc.
+
+**🆕 Web 实时仪表盘 / Web Real-time Dashboard**:
+
+```bash
+pandaone serve   # 浏览器打开 http://localhost:8765
+```
+
+<p align="center">
+  <img src="assets/dashboard.png" alt="Pandaone Web Dashboard — 15 audit records, 3 agents" width="900"/>
+  <br/>
+  <em>Web 版：15 条审计记录 · 11 APPROVED / 4 REJECTED · claude-code / cursor / trae 三方协作实时推送</em>
+</p>
 
 ### 防御体系（7 层） / Defense Layers (7 Layers)
 
@@ -296,11 +325,6 @@ pytest tests/ -v
 | **v0.7.1** | ✅ | **28 个 bug 全修 + 4 大新功能**：P0 安全（#8/#12×2/#22/#23）+ P1（#2/#5/#15/#29）+ P2（#21/#6/#20/#9-#10）+ P3（#13/#4/#26/#39）+ UX（#14/#17/#48/#25/#28）+ 工程化（#版本漂移 / #README 分组标签 / #CRLF 根因）+ **🆕 文件夹熊猫锁图标**（desktop.ini + ICO）+ **🆕 Web 实时仪表盘**（watchdog + SSE <100ms）+ **🆕 Git 兼容**（init 自动写 .gitignore）+ **🆕 右键菜单真实可用验证**，298 测试通过 |
 | **v0.7.2** | ✅ | **CI 工程化修复**：publish.yml Tests job 在干净 ubuntu-latest 容器 25s exit 1（setuptools pin 缺失）→ pin `setuptools==80.10.2` + `--no-build-isolation`，新增 pytest log artifact 上传。340 测试通过 |
 | **v0.7.3** | ✅ | **agent 身份 + diff 捕获 + 面板 UI**：`--agent` 参数追踪调用方（Claude / Cursor / Trae / user:name）+ `--verbose` 完整 diff + 彩色面板格式（状态 / 文件 / commit / 行数 / 原因 / 问题 / 方法 / 差异）+ status 加 agent 分组统计 + HTML 导出加卡片布局 + i18n 新增 16 个键。342 测试通过 |
-| **v0.7.9** | ✅ | **修 Windows `pandaone install-context`**：自 v0.7.0 失效（5 个 PowerShell bug 累积），改用 Python `winreg` 直接写 HKCU 注册表 |
-| **v0.7.10** | ✅ | **Bug #40 修复**：移除 5 处 `D:\软件\Git\cmd` 硬编码路径，统一从 `%ProgramFiles%` / `LOCALAPPDATA` / `USERPROFILE` / `HKLM\SOFTWARE\GitForWindows\InstallPath` 动态派生候选路径——跨语言 Windows 通用 |
-| **v0.7.11** | ✅ | **一键硬隔离安装脚本**：`install.ps1` (Windows) + `install.sh` (macOS/Linux)，从 GitHub Release 拉 wheel + SHA256 校验 + 强制 venv 隔离 + 加 PATH |
-| **v0.7.12** | ✅ | **install 脚本默认全自动配环境**：自动跑 `install-context`（Windows 右键菜单）+ `install-hook`（git pre-commit hook，cwd 是 git repo 时）。`publish.yml` 修 checkout step，自动 attach install 脚本到 GitHub Release |
-| **v0.7.13** | ✅ | **零前置安装**：Windows PATH 没 Python → 自动下载嵌入式 Python 3.12（**无管理员**、无 GUI）；Git 检测 + 平台特定命令（winget / brew / xcode-select / apt / dnf / yum / pacman / apk）；git 不可用时优雅跳过 hook 步骤 |
 
 完整历史：[CHANGELOG.md](CHANGELOG.md)
 
@@ -326,36 +350,32 @@ which records reason / problem / approach as immutable audit evidence.
 
 ### Install
 
-**Recommended: One-line hard-isolated installer (v0.7.11+; v0.7.13 zero-preinstall)**
-
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/hellob1889/Pandaone-AI-Agent/main/install.ps1 | iex
-```
-
-```bash
-# macOS / Linux
-curl -sSL https://raw.githubusercontent.com/hellob1889/Pandaone-AI-Agent/main/install.sh | bash
-```
-
-**Auto-handles**:
-1. Detects Python ≥ 3.8 (Windows: auto-downloads embedded Python 3.12 if missing, **no admin**)
-2. Detects git (prints platform-specific install command if missing)
-3. Creates hard-isolated venv (no system site-packages pollution)
-4. Pulls latest wheel from GitHub Release + SHA256 verify
-5. Installs pandaone + adds to PATH
-6. **Auto-runs `pandaone install-context`** (Windows right-click menu)
-7. **Auto-runs `pandaone install-hook`** (git pre-commit hook, if cwd is a git repo)
-
-See [Full Install Guide](docs/en/install.md) · [完整安装说明](docs/zh/install.md).
-
-**Alternative: traditional pip install**
+**Option A: from PyPI (easiest)**
 
 ```bash
 pip install pandaone-guard
-pandaone install-context   # Windows right-click menu
-pandaone install-hook      # git pre-commit hook
 ```
+
+**Option B: from source (recommended for developers, includes latest i18n + CI lint)**
+
+```bash
+git clone https://github.com/hellob1889/Pandaone-AI-Agent.git
+cd pandaone
+
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+
+# macOS / Linux
+./scripts/install.sh
+```
+
+**The install script automatically**:
+1. Checks Python >= 3.10
+2. Locates git (scans common install paths if not in PATH)
+3. Removes stale pandaone from site-packages (prevents version conflicts)
+4. `pip install -e .` local source editable install
+5. Verifies pandaone works (`python -m pandaone --version`)
+6. Runs `doctor.py --fix --persist-path` (auto-fix remaining issues: deps / setuptools / fingerprint / persist PATH to HKCU)
 
 ### Environment diagnostics (run anytime)
 
