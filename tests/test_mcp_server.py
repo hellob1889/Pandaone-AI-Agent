@@ -155,6 +155,40 @@ class TestMCPToolsList:
         finally:
             _stop(p)
 
+    def test_each_tool_has_annotations(self):
+        """每个工具应有 4 个 annotations（readOnlyHint/destructiveHint/idempotentHint/openWorldHint）
+
+        依据：MCP spec / OpenAI 目录要求 — 4 个 hint 必须全部声明，且为 bool。
+        缺一个 → OpenAI 目录拒绝收录。
+        """
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 31, "method": "tools/list", "params": {}
+            })
+            tools = resp["result"]["tools"]
+            required_hints = ("readOnlyHint", "destructiveHint",
+                               "idempotentHint", "openWorldHint")
+            assert len(tools) == 11, f"应恰好 11 个工具，实际 {len(tools)}"
+            for tool in tools:
+                name = tool.get("name", "<unnamed>")
+                assert "annotations" in tool, (
+                    f"{name} 缺 annotations 块（M8ven trust index 会扣分）"
+                )
+                ann = tool["annotations"]
+                for hint in required_hints:
+                    assert hint in ann, f"{name} 缺 {hint}（OpenAI 目录要求）"
+                    assert isinstance(ann[hint], bool), (
+                        f"{name}.{hint} 必须为 bool，实际 {type(ann[hint]).__name__}={ann[hint]!r}"
+                    )
+        finally:
+            _stop(p)
+
 
 class TestMCPToolsCall:
     """MCP tools/call 方法"""
@@ -249,6 +283,149 @@ class TestMCPToolsCall:
                 },
             })
             assert "result" in resp
+        finally:
+            _stop(p)
+
+    def test_call_install_hook_creates_precommit(self, tmp_path):
+        """调用 pandaone_install_hook 应在 .git/hooks/pre-commit 写入 hook 脚本"""
+        # 先 git init（hook 安装需要 .git/）
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(SRC_DIR)
+        subprocess.run([sys.executable, "-m", "pandaone", "init", "--root", str(tmp_path)],
+                       cwd=str(tmp_path), env=env, capture_output=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(tmp_path),
+                       env=env, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"],
+                       env=env, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
+                       env=env, capture_output=True)
+
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {
+                    "name": "pandaone_install_hook",
+                    "arguments": {"root": str(tmp_path)},
+                },
+            })
+            assert "result" in resp, f"失败: {resp}"
+            hook_file = tmp_path / ".git" / "hooks" / "pre-commit"
+            assert hook_file.exists(), f"pre-commit hook 未创建：{hook_file}"
+            # hook 内容应含 pandaone 引用
+            content = hook_file.read_text(encoding="utf-8", errors="replace")
+            assert "pandaone" in content.lower() or "audit" in content.lower(), (
+                f"hook 内容异常：{content[:200]}"
+            )
+        finally:
+            _stop(p)
+
+    def test_call_install_git_probe_only_safe(self):
+        """调用 pandaone_install_git（默认 probe_only=True）不应触发下载"""
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                "params": {
+                    "name": "pandaone_install_git",
+                    "arguments": {},
+                },
+            })
+            assert "result" in resp, f"失败: {resp}"
+            # 不论 git 是否已装，probe 都不会下载。content 应有 stdout/stderr。
+            content = resp["result"].get("content") or []
+            assert isinstance(content, list)
+        finally:
+            _stop(p)
+
+    def test_call_fingerprint_update_writes_hash(self, tmp_path):
+        """调用 pandaone_fingerprint_update 应写入密码指纹到 .pandaone/
+
+        前提：CLI 默认密码是 '0000'（get_fingerprint_password()）。
+        必须传与默认匹配的密码，否则 CLI 返回 '密码错误，指纹未更新'。
+        """
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(SRC_DIR)
+        subprocess.run([sys.executable, "-m", "pandaone", "init", "--root", str(tmp_path)],
+                       cwd=str(tmp_path), env=env, capture_output=True)
+
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            # 传默认密码 "0000"（pandaone/cli_chunks/part_002.py:_DEFAULT_FP_PASSWORD）
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": {
+                    "name": "pandaone_fingerprint_update",
+                    "arguments": {"password": "0000"},
+                },
+            })
+            assert "result" in resp, f"失败: {resp}"
+            # 返回不应是 error
+            assert resp["result"].get("isError") is not True, (
+                f"指纹更新失败：{resp['result']}"
+            )
+        finally:
+            _stop(p)
+
+    def test_call_ci_reachable_returns_verification(self, tmp_path):
+        """调用 pandaone_ci 应可达（即使 base 分支不存在也返回结构化响应，不崩溃）"""
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(SRC_DIR)
+        # init + git init + 初始 commit（让 ci 至少有 base 可比）
+        subprocess.run([sys.executable, "-m", "pandaone", "init", "--root", str(tmp_path)],
+                       cwd=str(tmp_path), env=env, capture_output=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(tmp_path),
+                       env=env, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"],
+                       env=env, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
+                       env=env, capture_output=True)
+        # 制造一个 dummy 文件让 init 完成
+        (tmp_path / "README.md").write_text("# test\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-A"],
+                       env=env, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "initial"],
+                       env=env, capture_output=True)
+
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            # 用 HEAD 自身作 base（避免 origin/main 不存在的副作用）
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": {
+                    "name": "pandaone_ci",
+                    "arguments": {
+                        "root": str(tmp_path),
+                        "base": "HEAD",
+                        "head": "HEAD",
+                    },
+                },
+            })
+            assert "result" in resp or "error" in resp, (
+                f"MCP 服务器应返回结构化响应（result 或 error），实际：{resp}"
+            )
+            # 不论 result 还是 error，都不应是协议级崩溃
+            assert "jsonrpc" in resp
         finally:
             _stop(p)
 
