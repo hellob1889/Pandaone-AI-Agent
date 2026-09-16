@@ -2,6 +2,114 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.14] - 2026-09-16
+
+### M8ven Trust Index A 级 — Verified Publisher
+
+**用户旅程**：「用户能在 GitHub 上面下载就能用的」原则延伸到「AI Agent 生态可信」层面。
+
+v0.7.14 是 v0.7.13 后**两天内的快速迭代**，核心目标是：
+
+1. **通过 M8ven Trust Index 全量审查**
+2. **修复 M8ven 公开 finding 中的 1 个 hard blocker**
+3. **让 README 在 GitHub 首屏 5 秒内传达产品价值**
+
+### Added: MCP 工具 annotations 全量声明（PR #44）
+
+**问题（M8ven 公开 finding）**：
+- 11 个 MCP 工具 **全部**缺失 4 个 MCP spec 要求的 hints（readOnlyHint / destructiveHint / idempotentHint / openWorldHint）
+- OpenAI 目录**直接拒绝收录**缺少任一 hint 的工具
+- 这是 OpenAI 目录合规的硬性要求，不是软建议
+
+**修复**（`src/pandaone_mcp/__main__.py`）：
+
+| 工具 | readOnly | destructive | idempotent | openWorld | 行为依据 |
+|---|---|---|---|---|---|
+| `pandaone_init` | F | F | F | F | 创建 `.pandaone/`，每次运行变更状态 |
+| `pandaone_lock` | F | F | T | F | 改 attrs；可逆；锁两次=锁一次 |
+| `pandaone_unlock` | F | F | T | F | 锁的反操作；同样幂等 |
+| `pandaone_write` | F | **T** | F | F | 覆盖文件内容；每次追加审计记录 |
+| `pandaone_log` | **T** | F | T | F | 只读查询 |
+| `pandaone_status` | **T** | F | T | F | 只读查询 |
+| `pandaone_install_hook` | F | F | T | F | 写 `.git/hooks/pre-commit`；幂等 |
+| `pandaone_watch` | F | F | F | F | 启动守护进程；不幂等 |
+| `pandaone_install_git` | F | F | T | **T** | 从 GitHub Releases 下载便携 git |
+| `pandaone_fingerprint_update` | F | F | T | F | 写哈希；同密码→同状态 |
+| `pandaone_ci` | **T** | F | T | F | 纯校验；不改仓库 |
+
+**配套测试**（`tests/test_mcp_server.py`）：
+
+- `test_each_tool_has_annotations` — schema 验证，确保每个工具有 4 个 hints 都是 bool
+- `test_call_install_hook_creates_precommit` — 验证 hook 文件被写入
+- `test_call_install_git_probe_only_safe` — 验证不触发下载
+- `test_call_fingerprint_update_writes_hash` — 使用默认密码 `"0000"`（CLI 默认值）
+- `test_call_ci_reachable_returns_verification` — 验证 MCP wrapper 在 base 不存在时不崩溃
+
+测试结果：**89 passed (was 84)** · 11/11 工具覆盖（was 7/11 = 64%）
+
+### Added: README 视觉冲击升级（PR #43）
+
+**问题**：README 首屏只有 ASCII 框 + 徽章，新访客 5 秒内**看不出** pandaone 是干嘛的。
+
+**修复**：在 4 个战略位置嵌入真实截图：
+
+| 位置 | 截图 | 视觉作用 |
+|---|---|---|
+| 第 11-15 行（顶部 logo 下方） | `terminal-write.png` | 首屏直接看到 `[APPROVED]` 凭证 |
+| "查看审计日志" 章节 | `terminal-log.png` | 展示 reason/problem/approach 三段式凭证 |
+| "项目状态仪表盘" 章节 | `terminal-status.png` | 41 保护格式 + L1/L6 实时状态 |
+| "Web 实时仪表盘" 章节 | `dashboard.png` | 真实 Web 仪表盘截图 |
+
+**第一性原则：真实数据，非 mockup**
+
+所有截图用 `pandaone.jsonl` 真实审计数据渲染，rich 库重画保证排版整齐。**不是编的**。
+
+### Added: M8ven Verified Publisher 徽章
+
+**Claim 流程**（用户手动）：
+1. 访问 `https://github.com/apps/m8ven-verify/installations/new?state=...`
+2. 选择 "Only select repositories" → `hellob1889/Pandaone-AI-Agent`
+3. GitHub sudo mode 密码确认
+4. 安装完成 → M8ven 自动识别 publisher
+
+**徽章**（README 第 75 行）：
+
+```markdown
+[![M8ven Score](https://m8ven.ai/badge/mcp/hellob1889/pandaone-ai-agent)](https://m8ven.ai/mcp/hellob1889/pandaone-ai-agent)
+```
+
+使用**官方 M8ven URL**而非 hardcoded shields.io，**分数变化自动更新**。
+
+### M8ven Trust Index 分数变化
+
+| 节点 | score | grade | trust | warn | fail |
+|---|---|---|---|---|---|
+| 初始（未 claim） | 74 | C | — | 2 | 1 |
+| Claim 完成 | 96 | A | 89 | 2 | 1 |
+| **v0.7.14（PR #43 + #44 merged）** | **100** | **A** | 89 | **0** | **0** |
+
+**对用户的实际好处**：
+- OpenAI 目录合规（之前会被拒绝）
+- 11/11 工具覆盖（之前 7/11 = 64%）
+- Live Monitored = 每次 push 自动重测 + CVE 告警
+
+### Operational: 每日 M8ven 监控 cron
+
+创建了 Schedule `89dfb0b6`（每天 09:00 Asia/Shanghai），自动：
+1. 抓取最新 M8ven score JSON
+2. 与历史记录对比 delta
+3. 写到 `.pandaone/m8ven_history.jsonl`
+4. 输出简短报告；分数下降 / warn 增加时触发 ALERT
+
+### 对抗式审查（v0.7.14）
+
+- ✅ 11/11 工具 annotations 严格匹配 handler 实际行为
+- ✅ 全部 5 张视觉资产 HTTP 200 + valid PNG signature
+- ✅ M8ven badge URL 是官方端点，会自动更新（非 hardcoded）
+- ✅ git pre-commit hook (L3) 仍正常工作 — 大文件 push 没绕过
+- ⚠️ 3 hidden improvements 需要 M8ven 付费 API key 才能解锁（不是必需的）
+- ⚠️ trust_score 89 不是 100，原因是 `stars=0, adoption_tier=unknown`（reputation 子项）
+
 ## [0.7.13] - 2026-09-15
 
 ### Changed: install 脚本支持新电脑零前置环境 (PR #42 增强)
