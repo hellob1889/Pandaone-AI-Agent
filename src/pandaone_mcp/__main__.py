@@ -54,6 +54,12 @@ TOOLS = [
             },
             "required": ["root"],
         },
+        "annotations": {
+            "readOnlyHint": False,         # creates .pandaone/ + config.json + jsonl
+            "destructiveHint": False,      # doesn't destroy existing files
+            "idempotentHint": False,       # each run mutates state (new jsonl entries)
+            "openWorldHint": False,        # only touches its own .pandaone/ subdir
+        },
     },
     {
         "name": "pandaone_lock",
@@ -63,6 +69,12 @@ TOOLS = [
             "properties": {"root": {"type": "string", "default": "."}},
             "required": ["root"],
         },
+        "annotations": {
+            "readOnlyHint": False,         # mutates file attrs (attrib +r / chmod -w)
+            "destructiveHint": False,      # reversible via pandaone_unlock
+            "idempotentHint": True,        # lock-twice = same state as lock-once
+            "openWorldHint": False,        # only touches files under root
+        },
     },
     {
         "name": "pandaone_unlock",
@@ -71,6 +83,12 @@ TOOLS = [
             "type": "object",
             "properties": {"root": {"type": "string", "default": "."}},
             "required": ["root"],
+        },
+        "annotations": {
+            "readOnlyHint": False,         # mutates file attrs (attrib -r / chmod +w)
+            "destructiveHint": False,      # reverses pandaone_lock
+            "idempotentHint": True,        # unlock-twice = same state as unlock-once
+            "openWorldHint": False,        # only touches files under root
         },
     },
     {
@@ -97,6 +115,12 @@ TOOLS = [
             },
             "required": ["file", "reason", "problem", "approach"],
         },
+        "annotations": {
+            "readOnlyHint": False,         # overwrites target file content
+            "destructiveHint": True,       # may overwrite untracked / pre-audit content
+            "idempotentHint": False,       # each call appends an audit record (state changes)
+            "openWorldHint": False,        # only touches files under root
+        },
     },
     {
         "name": "pandaone_log",
@@ -114,6 +138,12 @@ TOOLS = [
             },
             "required": ["root"],
         },
+        "annotations": {
+            "readOnlyHint": True,          # read-only (only writes optional export file)
+            "destructiveHint": False,      # never destructive
+            "idempotentHint": True,        # log query is pure function of .pandaone/pandaone.jsonl
+            "openWorldHint": False,        # only reads .pandaone/ under root
+        },
     },
     {
         "name": "pandaone_status",
@@ -122,6 +152,12 @@ TOOLS = [
             "type": "object",
             "properties": {"root": {"type": "string", "default": "."}},
             "required": ["root"],
+        },
+        "annotations": {
+            "readOnlyHint": True,          # pure read
+            "destructiveHint": False,
+            "idempotentHint": True,        # pure read
+            "openWorldHint": False,        # only reads .pandaone/ under root
         },
     },
     {
@@ -136,6 +172,12 @@ TOOLS = [
             },
             "required": ["root"],
         },
+        "annotations": {
+            "readOnlyHint": False,         # writes .git/hooks/pre-commit
+            "destructiveHint": False,      # writes a new file; uninstall removes it
+            "idempotentHint": True,        # install-hook twice = same as once
+            "openWorldHint": False,        # only touches .git/ under root
+        },
     },
     {
         "name": "pandaone_watch",
@@ -148,6 +190,12 @@ TOOLS = [
             },
             "required": ["root"],
         },
+        "annotations": {
+            "readOnlyHint": False,         # starts a long-running daemon process
+            "destructiveHint": False,      # watchdog only observes + prompts, doesn't mutate
+            "idempotentHint": False,       # starts a NEW process each call (may need dedup)
+            "openWorldHint": False,        # observes filesystem under root only
+        },
     },
     {
         "name": "pandaone_install_git",
@@ -159,6 +207,12 @@ TOOLS = [
                 "auto_download": {"type": "boolean", "default": False, "description": "自动下载缺失的 git"},
             },
         },
+        "annotations": {
+            "readOnlyHint": False,         # writes bundled git to a known cache dir
+            "destructiveHint": False,      # downloads to its own cache; doesn't touch user files
+            "idempotentHint": True,        # probe is pure; download dedupes by sha256
+            "openWorldHint": True,         # downloads portable git from GitHub releases
+        },
     },
     {
         "name": "pandaone_fingerprint_update",
@@ -169,6 +223,12 @@ TOOLS = [
                 "password": {"type": "string", "description": "新密码"},
             },
             "required": ["password"],
+        },
+        "annotations": {
+            "readOnlyHint": False,         # writes password hash to .pandaone/
+            "destructiveHint": False,      # overwrites previous hash but reversible
+            "idempotentHint": True,        # same password → same hash → same state
+            "openWorldHint": False,        # only touches .pandaone/ under root
         },
     },
     {
@@ -182,6 +242,12 @@ TOOLS = [
                 "head": {"type": "string", "description": "对比分支", "default": "HEAD"},
             },
             "required": ["root"],
+        },
+        "annotations": {
+            "readOnlyHint": True,          # pure verification — never mutates repo
+            "destructiveHint": False,
+            "idempotentHint": True,        # same base/head → same report
+            "openWorldHint": False,        # only reads git refs + .pandaone/ under root
         },
     },
 ]
