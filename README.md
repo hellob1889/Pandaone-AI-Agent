@@ -264,6 +264,61 @@ pandaone serve   # 浏览器打开 http://localhost:8765
 
 暴露 **11 个工具**：`pandaone_init` / `pandaone_lock` / `pandaone_unlock` / `pandaone_write` / `pandaone_log` / `pandaone_status` / `pandaone_install_hook` / `pandaone_watch` / `pandaone_install_git` / `pandaone_fingerprint_update` / `pandaone_ci`
 
+**所有 11 个工具都已声明完整的 4 个 MCP annotations**（`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`）—— **OpenAI 目录合规**（v0.7.14 修复）。
+
+#### 在 ChatGPT 中使用 / Use with ChatGPT
+
+ChatGPT Desktop app 的 Developer Mode（开发者模式）原生支持 MCP server。把 pandaone 加进去：
+
+**步骤**：
+1. 打开 ChatGPT Desktop app
+2. `Settings` → `Beta features` → **开启 Developer Mode**
+3. `Settings` → `Connectors` → `Create new connector`
+4. 填入以下 JSON（**字段名一字不差**）：
+
+```json
+{
+  "name": "pandaone-guard",
+  "command": "pandaone-mcp",
+  "args": [],
+  "env": {}
+}
+```
+
+5. 第一次对话前，ChatGPT 会要求安装 pandaone-guard。如未自动装，在终端手动跑：
+
+```bash
+# macOS / Linux
+pip3 install pandaone-guard
+
+# Windows (PowerShell)
+pip install pandaone-guard
+```
+
+**进阶**（自定义 venv / Python 路径 / 中文界面）：
+
+```json
+{
+  "name": "pandaone-guard",
+  "command": "/path/to/venv/bin/python",
+  "args": ["-m", "pandaone_mcp"],
+  "env": {
+    "PANDAX_LANG": "zh"
+  }
+}
+```
+
+**环境变量说明** / Environment variables：
+
+| 变量 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `PANDAX_FP_PASSWORD` | 🔐 secret | `"0000"` | 仅 `pandaone_fingerprint_update` / `pandaone_watch` 守护进程鉴权需要；本地设置，不上传 |
+| `PANDAX_LANG` | config | `"zh"` | 界面语言（`zh` / `en`）|
+| `PANDAONE_SKIP_GIT_CHECK` | config | unset | 设 `1` 跳过 git 检测（无 git 环境用）|
+| `NO_COLOR` | config | unset | 设 `1` 禁用彩色输出 |
+
+**只有一个 secret**：`PANDAX_FP_PASSWORD`。本地配置，永不上传到任何远程。
+
 ### 真实场景测试 / Real-World Validation
 
 完整实战验证报告：[实战验证报告.md](实战验证报告.md)
@@ -438,6 +493,61 @@ pandaone write \
 ```
 
 Exposes 11 tools for AI agents (Claude / Cursor / Trae).
+
+**All 11 tools declare the full set of 4 MCP annotations** (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`) — **OpenAI directory compliant** (fixed in v0.7.14).
+
+#### Use with ChatGPT
+
+ChatGPT Desktop app's Developer Mode natively supports MCP servers. To add pandaone:
+
+**Steps**:
+1. Open ChatGPT Desktop app
+2. `Settings` → `Beta features` → **enable Developer Mode**
+3. `Settings` → `Connectors` → `Create new connector`
+4. Paste this JSON (field names must match exactly):
+
+```json
+{
+  "name": "pandaone-guard",
+  "command": "pandaone-mcp",
+  "args": [],
+  "env": {}
+}
+```
+
+5. ChatGPT will offer to install `pandaone-guard` on first use. If it doesn't auto-install, run manually:
+
+```bash
+# macOS / Linux
+pip3 install pandaone-guard
+
+# Windows (PowerShell)
+pip install pandaone-guard
+```
+
+**Advanced** (custom venv / Python path / English interface):
+
+```json
+{
+  "name": "pandaone-guard",
+  "command": "/path/to/venv/bin/python",
+  "args": ["-m", "pandaone_mcp"],
+  "env": {
+    "PANDAX_LANG": "en"
+  }
+}
+```
+
+**Environment variables**:
+
+| Variable | Type | Default | Purpose |
+|---|---|---|---|
+| `PANDAX_FP_PASSWORD` | 🔐 secret | `"0000"` | Only needed for `pandaone_fingerprint_update` / `pandaone_watch` daemon auth; set locally, never uploaded |
+| `PANDAX_LANG` | config | `"zh"` | UI language (`zh` / `en`) |
+| `PANDAONE_SKIP_GIT_CHECK` | config | unset | Set to `1` to skip git detection (for git-less environments) |
+| `NO_COLOR` | config | unset | Set to `1` to disable colored output |
+
+**Only one secret**: `PANDAX_FP_PASSWORD`. Local config only, never sent to any remote.
 
 ### License
 
