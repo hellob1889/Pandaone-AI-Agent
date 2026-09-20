@@ -171,14 +171,15 @@ function Install-CascadeMenu {
 
     $baseKey = "HKCU:\Software\Classes\$RootKey\Pandaone"
 
-    # 主菜单（cascade = submenu）
-    Set-RegValue -Path $baseKey -Name '' -Type 'String' -Value 'Pandaone'
-    Set-RegValue -Path $baseKey -Name 'MUIVerb' -Type 'String' -Value 'Pandaone 审计工具 / Audit Tools'
+    # 主菜单（cascade = submenu，V2 ExtendedSubCommandsKey 模式）
+    Set-RegValue -Path $baseKey -Name '' -Type 'String' -Value ''
     Set-RegValue -Path $baseKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path $baseKey -Name 'SubCommands' -Type 'String' -Value ''
+    Set-RegValue -Path $baseKey -Name 'ExtendedSubCommandsKey' -Type 'String' -Value 'Pandaone\Shell'
+
+    $repo = "$baseKey\Shell"
 
     # 1) Init
-    $initKey = "$baseKey\shell\Init"
+    $initKey = "$repo\Init"
     Set-RegValue -Path $initKey -Name '' -Type 'String' -Value '初始化 Pandaone (init)'
     Set-RegValue -Path $initKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default init --root `"%V`""
