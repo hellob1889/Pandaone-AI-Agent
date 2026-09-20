@@ -182,6 +182,7 @@ function Install-CascadeMenu {
     $initKey = "$repo\Init"
     Set-RegValue -Path $initKey -Name '' -Type 'String' -Value '初始化 Pandaone (init)'
     Set-RegValue -Path $initKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
+    Set-RegValue -Path $initKey -Name 'CommandFlags' -Type 'DWord' -Value 0x20
     Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default init --root `"%V`""
 
     # 2) Lock
