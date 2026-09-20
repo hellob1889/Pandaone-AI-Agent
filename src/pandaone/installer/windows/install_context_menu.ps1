@@ -192,7 +192,7 @@ function Install-CascadeMenu {
     Set-RegValue -Path "$lockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default lock --root `"%V`""
 
     # 3) Status
-    $statusKey = "$baseKey\shell\Status"
+    $statusKey = "$repo\Status"
     Set-RegValue -Path $statusKey -Name '' -Type 'String' -Value '查看状态 (status)'
     Set-RegValue -Path $statusKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$statusKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default status --root `"%V`""
