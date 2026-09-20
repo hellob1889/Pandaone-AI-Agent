@@ -186,7 +186,7 @@ function Install-CascadeMenu {
     Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default init --root `"%V`""
 
     # 2) Lock
-    $lockKey = "$baseKey\shell\Lock"
+    $lockKey = "$repo\Lock"
     Set-RegValue -Path $lockKey -Name '' -Type 'String' -Value '锁定文件 (lock)'
     Set-RegValue -Path $lockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$lockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default lock --root `"%V`""
