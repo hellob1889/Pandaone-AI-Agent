@@ -81,3 +81,12 @@ examples/demo_05_full/
 # Pandaone 运行时产物(自动管理,不要手动提交)
 .pandaone/
 desktop.ini
+
+# ============================================================
+# Trae IDE 临时文件 + 大体积 workspace 产物（不入仓库）
+# ============================================================
+.trae/
+.trae-html-share-packages/
+
+# Smithery 提交草稿（付费平台，按"需要收费的不做"原则不入仓）
+smithery_*.html

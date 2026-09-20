@@ -122,10 +122,18 @@ function Set-RegValue {
     }
     # CreateSubKey 自动创建父 key（即使中间层级不存在）
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($subPath)
-    if ($Name -eq '') {
-        $key.SetValue($null, $Value, $kind)   # null = "(Default)"
+    # PS5.1 SetValue 对 DWord/Binary 需要显式 int[]/byte[] 强转（0x20 默认推断为 long 触发 ArgumentException）
+    if ($kind -eq [Microsoft.Win32.RegistryValueKind]::DWord) {
+        $typedValue = [int]$Value
+    } elseif ($kind -eq [Microsoft.Win32.RegistryValueKind]::Binary) {
+        $typedValue = [byte[]]$Value
     } else {
-        $key.SetValue($Name, $Value, $kind)
+        $typedValue = [string]$Value
+    }
+    if ($Name -eq '') {
+        $key.SetValue($null, $typedValue, $kind)   # null = "(Default)"
+    } else {
+        $key.SetValue($Name, $typedValue, $kind)
     }
     $key.Close()
 }
@@ -163,32 +171,34 @@ function Install-CascadeMenu {
 
     $baseKey = "HKCU:\Software\Classes\$RootKey\Pandaone"
 
-    # 主菜单（cascade = submenu）
-    Set-RegValue -Path $baseKey -Name '' -Type 'String' -Value 'Pandaone'
-    Set-RegValue -Path $baseKey -Name 'MUIVerb' -Type 'String' -Value 'Pandaone 审计工具 / Audit Tools'
+    # 主菜单（cascade = submenu，V2 ExtendedSubCommandsKey 模式）
+    Set-RegValue -Path $baseKey -Name '' -Type 'String' -Value ''
     Set-RegValue -Path $baseKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path $baseKey -Name 'SubCommands' -Type 'String' -Value ''
+    Set-RegValue -Path $baseKey -Name 'ExtendedSubCommandsKey' -Type 'String' -Value 'Pandaone\Shell'
+
+    $repo = "$baseKey\Shell"
 
     # 1) Init
-    $initKey = "$baseKey\shell\Init"
+    $initKey = "$repo\Init"
     Set-RegValue -Path $initKey -Name '' -Type 'String' -Value '初始化 Pandaone (init)'
     Set-RegValue -Path $initKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
+    Set-RegValue -Path $initKey -Name 'CommandFlags' -Type 'DWord' -Value 0x20
     Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default init --root `"%V`""
 
     # 2) Lock
-    $lockKey = "$baseKey\shell\Lock"
+    $lockKey = "$repo\Lock"
     Set-RegValue -Path $lockKey -Name '' -Type 'String' -Value '锁定文件 (lock)'
     Set-RegValue -Path $lockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$lockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default lock --root `"%V`""
 
     # 3) Status
-    $statusKey = "$baseKey\shell\Status"
+    $statusKey = "$repo\Status"
     Set-RegValue -Path $statusKey -Name '' -Type 'String' -Value '查看状态 (status)'
     Set-RegValue -Path $statusKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$statusKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default status --root `"%V`""
 
     # 4) Unlock
-    $unlockKey = "$baseKey\shell\Unlock"
+    $unlockKey = "$repo\Unlock"
     Set-RegValue -Path $unlockKey -Name '' -Type 'String' -Value '解锁文件 (unlock)'
     Set-RegValue -Path $unlockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$unlockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default unlock --root `"%V`""
