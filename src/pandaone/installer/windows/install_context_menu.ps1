@@ -198,7 +198,7 @@ function Install-CascadeMenu {
     Set-RegValue -Path "$statusKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default status --root `"%V`""
 
     # 4) Unlock
-    $unlockKey = "$baseKey\shell\Unlock"
+    $unlockKey = "$repo\Unlock"
     Set-RegValue -Path $unlockKey -Name '' -Type 'String' -Value '解锁文件 (unlock)'
     Set-RegValue -Path $unlockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path "$unlockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default unlock --root `"%V`""
