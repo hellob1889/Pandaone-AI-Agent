@@ -187,9 +187,13 @@ class TestWatchdogStdoutFlush:
         )
 
     def test_pandaone_watch_daemon_sets_pythonunbuffered(self):
-        """cli.py cmd_watch --daemon 子进程必须设 PYTHONUNBUFFERED=1"""
-        cli_path = SRC_DIR / "pandaone" / "cli.py"
-        source = cli_path.read_text(encoding="utf-8")
+        """cli cmd_watch --daemon 子进程必须设 PYTHONUNBUFFERED=1
+
+        v0.7.15 fix: cli.py 自 v0.7.7 起是 chunk loader，实际代码在
+        cli_chunks/part_005.py。静态检查必须读 chunks 而不是 loader。
+        """
+        chunk_files = sorted((SRC_DIR / "pandaone" / "cli_chunks").glob("part_*.py"))
+        source = "\n".join(p.read_text(encoding="utf-8") for p in chunk_files)
 
         # 在 daemon 模式 subprocess.Popen 调用附近必须有 PYTHONUNBUFFERED
         # 检查 pattern: env={**os.environ, "PYTHONUNBUFFERED": "1"}

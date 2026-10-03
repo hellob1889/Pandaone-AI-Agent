@@ -49,11 +49,11 @@ def _run_cli(*args, cwd=None, env_extra=None):
 
 
 def _git_exe():
-    """获取 git 绝对路径"""
-    candidates = [r"D:\软件\Git\cmd\git.exe", r"C:\Program Files\Git\cmd\git.exe"]
-    for c in candidates:
-        if Path(c).exists():
-            return c
+    """获取 git 绝对路径（v0.7.15: 动态探测，不再硬编码作者机器路径）"""
+    import shutil
+    c = shutil.which("git")
+    if c:
+        return c
     pytest.skip("git not found")
 
 

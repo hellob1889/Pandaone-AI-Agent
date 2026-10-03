@@ -242,8 +242,24 @@ def cmd_write(args):
     is_binary = target_eff_suffix in binary_exts
 
     # 检查目标文件存在 + 后缀受保护
-    if not target.exists():
-        reject_reason = f"目标文件不存在: {target_rel}"
+    # v0.7.15: 允许通过审计通道创建新文件（MCP/Agent 核心场景）。
+    #   之前新文件一律 REJECTED，逼 Agent 绕过审计直接写文件，门禁形同虚设。
+    #   现在新建必须满足：扩展名在保护范围内 + 提供完整内容（--content /
+    #   --content-base64 / --from-file），审计记录 status=APPROVED + action=create。
+    has_content_payload = bool(args.content or args.content_base64 or args.from_file)
+    is_new_file = not target.exists()
+    if is_new_file:
+        if not has_content_payload:
+            reject_reason = (
+                f"目标文件不存在: {target_rel}"
+                f"（新建文件需提供 --content / --content-base64 / --from-file）"
+            )
+        elif is_binary and target_eff_suffix not in binary_exts:
+            reject_reason = f"只允许创建二进制保护范围({binary_exts})内的文件"
+        elif not is_binary and target_eff_suffix not in text_exts:
+            reject_reason = f"只允许创建文本保护范围({text_exts})内的文件"
+        elif args.old:
+            reject_reason = "新文件不支持 --old/--new（无原文可替换），请用 --content"
     elif not is_binary and target_eff_suffix not in text_exts:
         reject_reason = f"只允许修改文本({text_exts})或二进制({binary_exts})保护范围内的文件"
 
@@ -254,8 +270,12 @@ def cmd_write(args):
     # === Bug #12 v2: L1 文件锁 ReadOnly 前置检查 ===
     # 默认拒绝修改 OS ReadOnly 文件（pandaone lock 设的）。仅 --force-write 才放行。
     # 对抗式审查：如果允许 write 默认解锁，恶意 Agent 可绕过用户意图。
-    if not reject_reason and target.exists() and not os.access(target, os.W_OK):
-        if not getattr(args, "force_write", False):
+    # v0.7.15 fix: 改用 mode 位检查而非 os.access()。
+    #   os.access() 以 real uid 判断，root（容器内 Agent 的常见环境）对 444
+    #   文件也返回可写，导致 L1 锁对 root 完全失效。mode 位检查不受影响。
+    if not reject_reason and target.exists():
+        _locked = not (target.stat().st_mode & stat.S_IWUSR)
+        if _locked and not getattr(args, "force_write", False):
             reject_reason = t("write_reject_readonly_need_force", file=target_rel)
 
     if reject_reason:
@@ -284,9 +304,14 @@ def cmd_write(args):
     token_path.write_text(str(uuid.uuid4()), encoding="utf-8")
 
     # === [3] 解锁目标文件 ===
-    mode = target.stat().st_mode
-    writable_mode = mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
-    os.chmod(target, writable_mode)
+    # v0.7.15: 新建文件没有原始 mode，跳过解锁/恢复（也无需恢复锁定状态）。
+    if is_new_file:
+        mode = None
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        mode = target.stat().st_mode
+        writable_mode = mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+        os.chmod(target, writable_mode)
 
     # 准备 step 4→5 的 try/finally 块：
     # Bug #12 fix: write_text/write_bytes 在隐藏/系统文件上会抛 PermissionError，
@@ -321,7 +346,8 @@ def cmd_write(args):
             _update_binary_snapshot(root, target_rel, new_sha)
         elif args.content:
             # 文本整文件模式
-            original_content = target.read_text(encoding="utf-8")
+            # v0.7.15: 新建文件没有原文，original_content 置空
+            original_content = target.read_text(encoding="utf-8") if target.exists() else ""
             new_content = args.content
             target.write_text(new_content, encoding="utf-8")
         elif args.old:
@@ -346,14 +372,16 @@ def cmd_write(args):
         # Bug #12 fix: 不论 write 成功或失败，都恢复原始 mode。
         # 直接用 step 3 保存的 `mode`（而不是再算 readonly_mode），
         # 这样能完整恢复 hidden/system/archive 等所有 file attributes。
-        try:
-            os.chmod(target, mode)
-        except Exception as chmod_err:
-            # 如果 chmod 失败（极少见，例如文件被另一进程占用），
-            # 必须明确告知用户 — 这是审计安全 fallback
-            print(f'[WARN] failed to restore file mode for {target_rel}: {chmod_err}')
-            if write_error is None:
-                write_error = ("REJECTED", f"无法恢复文件锁定状态: {chmod_err}")
+        # v0.7.15: 新建文件（mode=None）无原始 mode 可恢复，跳过。
+        if mode is not None:
+            try:
+                os.chmod(target, mode)
+            except Exception as chmod_err:
+                # 如果 chmod 失败（极少见，例如文件被另一进程占用），
+                # 必须明确告知用户 — 这是审计安全 fallback
+                print(f'[WARN] failed to restore file mode for {target_rel}: {chmod_err}')
+                if write_error is None:
+                    write_error = ("REJECTED", f"无法恢复文件锁定状态: {chmod_err}")
 
     if write_error is not None:
         # 记录 REJECTED audit
@@ -400,6 +428,7 @@ def cmd_write(args):
         "id": audit_id,
         "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "status": "APPROVED",
+        "action": "create" if is_new_file else "modify",
         "file": target_rel,
         "agent": getattr(args, "agent", "user:anonymous"),
         "reason": reason,

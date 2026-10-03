@@ -86,8 +86,9 @@ def test_install_git_handles_missing_git_gracefully():
     # 不应崩溃（PATH 空时 git 命令本身会 FileNotFoundError，但代码应捕获）
     assert r.returncode in (0, 1), f"应优雅处理: rc={r.returncode}"
 
-    # 输出应有意义（探测结果）
-    assert len(r.stdout) > 50, f"输出太短: {r.stdout}"
+    # 输出应有意义（探测结果）。阈值与上方 probe 测试对齐为 >20：
+    # i18n 下中文输出（如"[NOT FOUND] git 未安装"）比英文短，>50 是按英文硬编码的过时阈值
+    assert len(r.stdout) > 20, f"输出太短: {r.stdout}"
     # 至少包含 git 状态信息
     assert "git" in r.stdout.lower() or "探测" in r.stdout
 

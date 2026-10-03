@@ -24,6 +24,7 @@ Phase 6 — Pandaone AI Agent MCP (Model Context Protocol) server。
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -222,8 +223,10 @@ class TestMCPToolsCall:
         env["PYTHONPATH"] = str(SRC_DIR)
         subprocess.run([sys.executable, "-m", "pandaone", "init", "--root", str(tmp_path)],
                        cwd=str(tmp_path), env=env, capture_output=True)
-        # git init
-        git = r"D:\软件\Git\cmd\git.exe"
+        # git init（v0.7.15: 动态探测，不再硬编码作者机器路径）
+        git = shutil.which("git")
+        if not git:
+            pytest.skip("git not found")
         for cmd in [["init"], ["config", "user.email", "t@t"],
                     ["config", "user.name", "t"], ["add", "-A"]]:
             subprocess.run([git] + cmd, cwd=str(tmp_path), env=env, capture_output=True)

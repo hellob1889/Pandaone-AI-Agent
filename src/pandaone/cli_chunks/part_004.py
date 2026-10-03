@@ -35,6 +35,8 @@ def cmd_log(args):
     """查询审计历史。"""
     filtered, root = _query_records(args)
     if root is None:
+        # v0.7.15 fix: 之前静默 return 1，用户不知道发生了什么。
+        print(t("log_not_initialized", path=str(Path(args.root).resolve() / ".pandaone" / "pandaone.jsonl")))
         return 1
     if getattr(args, "export", ""):
         from .exporters import export_html
@@ -70,6 +72,8 @@ def cmd_export(args):
     """Bug #25 fix: 独立 export 子命令。"""
     filtered, root = _query_records(args)
     if root is None:
+        # v0.7.15 fix: 同 cmd_log，静默失败改为明确提示。
+        print(t("log_not_initialized", path=str(Path(args.root).resolve() / ".pandaone" / "pandaone.jsonl")))
         return 1
     if not getattr(args, "format", ""):
         print(t("export_err_no_format"))
@@ -112,16 +116,60 @@ def _print_log(records):
             status_icon = status
         header_line = f"{status_icon} - {rid} - {ts} - by {_colorize(agent, 'cyan')}"
         print("--- record ---")
-        print(f"file: {file_}")
+        # v0.7.15 fix: header_line 之前拼好但从未输出（死代码），
+        # 导致 log 看不到审计记录 ID / 时间 / agent，也无法与 CI 报告交叉引用。
+        print(header_line)
+        # v0.7.15 fix (Bug #14): 字段标签本地化（zh: 文件:/原因:... en: File:/Reason:...）
+        print(f"{t('log_label_file')}: {file_}")
         commit = rec.get("commit_hash") or "no_commit"
-        print(f"commit: {commit[:12]}")
+        print(f"{t('log_label_commit')}: {commit[:12]}")
         if status == "APPROVED":
-            print(f"reason: {rec.get('reason', '')}")
-            print(f"problem: {rec.get('problem', '')}")
-            print(f"approach: {rec.get('approach', '')}")
+            print(f"{t('log_label_reason')}: {rec.get('reason', '')}")
+            print(f"{t('log_label_problem')}: {rec.get('problem', '')}")
+            print(f"{t('log_label_approach')}: {rec.get('approach', '')}")
         elif status == "REJECTED":
-            print(f"rejection: {rec.get('rejection_reason', '')}")
+            print(f"{t('log_label_rejection')}: {rec.get('rejection_reason', '')}")
+        # v0.7.15: 补上 v0.7.3 承诺的面板特性 — 行数统计 + diff 内容段。
+        #   之前面板只显示文件/提交/原因，看不到改了什么（RED 测试悬空至今）。
+        _added = rec.get("lines_added", 0) or 0
+        _removed = rec.get("lines_removed", 0) or 0
+        if _added or _removed:
+            print(f"{t('log_label_lines')}: +{_added} -{_removed}")
+        _old_c = rec.get("old_content", "") or ""
+        _new_c = rec.get("new_content", "") or ""
+        if _old_c or _new_c:
+            _max_lines = None if verbose else 4
+            print(t("log_label_diff"))
+            if _old_c:
+                _old_lines = _old_c.rstrip("\n").splitlines()
+                for _ln in _old_lines[:_max_lines]:
+                    print(f"  - {_ln}")
+                if _max_lines and len(_old_lines) > _max_lines:
+                    print(f"  - ... (+{len(_old_lines) - _max_lines})")
+            if _new_c:
+                _new_lines = _new_c.rstrip("\n").splitlines()
+                for _ln in _new_lines[:_max_lines]:
+                    print(f"  + {_ln}")
+                if _max_lines and len(_new_lines) > _max_lines:
+                    print(f"  + ... (+{len(_new_lines) - _max_lines})")
         print("--- end ---")
+
+
+def _pid_alive(pid_text: str) -> bool:
+    """v0.7.15: 探测 watchdog PID 是否存活（POSIX 用 signal 0 探测）"""
+    try:
+        pid = int(pid_text.strip())
+    except (ValueError, AttributeError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True  # 进程存在但属主不同
+    except OSError:
+        return False
 
 
 def cmd_status(args):
@@ -131,6 +179,8 @@ def cmd_status(args):
     root = Path(args.root).resolve()
     pandaone_dir = root / ".pandaone"
     if not pandaone_dir.exists():
+        # v0.7.15 fix: 之前静默 return 1，用户不知道为什么没输出。
+        print(t("status_not_initialized", root=str(root)))
         return 1
     print("=" * 64)
     print(t("status_header", root=root))
@@ -142,6 +192,19 @@ def cmd_status(args):
         print(t("status_l1"))
         print(t("status_total", n=len(protected_files)))
         print(t("status_locked_unlocked", n=locked, m=unlocked))
+    # v0.7.15 fix: L2 watchdog 区块。i18n key (status_l2/status_watch_on/
+    # status_watch_off) 早已存在，但实现一直没接上（RED 测试悬空）。
+    print()
+    print(t("status_l2"))
+    pid_path = pandaone_dir / ".watchdog_pid"
+    if pid_path.exists():
+        pid_text = pid_path.read_text(encoding="utf-8").strip()
+        if _pid_alive(pid_text):
+            print(t("status_watch_on", pid=pid_text))
+        else:
+            print(t("status_watch_off"))
+    else:
+        print(t("status_watch_off"))
     print()
     print(t("status_l5"))
     if FP_PATH.exists():
@@ -167,6 +230,16 @@ def cmd_status(args):
                     continue
         total = len(records)
         print(t("status_total_records", n=total))
+        # v0.7.15 fix (Bug #17): 状态计数用本地化标签，不再裸输出 APPROVED 等
+        n_approved = sum(1 for r in records if r.get("status") == "APPROVED")
+        n_rejected = sum(1 for r in records if r.get("status") == "REJECTED")
+        n_unauth = sum(1 for r in records if r.get("status") == "UNAUTHORIZED")
+        if n_approved:
+            print(t("status_count_approved", n=n_approved))
+        if n_rejected:
+            print(t("status_count_rejected", n=n_rejected))
+        if n_unauth:
+            print(t("status_count_unauthorized", n=n_unauth))
     print()
     print("=" * 64)
     return 0
