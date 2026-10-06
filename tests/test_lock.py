@@ -65,6 +65,41 @@ def test_lock_makes_files_readonly(tmp_path):
             f.write("# should fail\n")
 
 
+def test_unlock_restores_original_mode_not_world_writable(tmp_path):
+    """v0.7.16: unlock 应还原锁定前的 mode，绝不留下 world-writable（666）
+
+    旧实现 `mode | S_IWUSR | S_IWGRP | S_IWOTH` 会把 444 解成 666，
+    任何同机用户都能改受保护文件 —— 门禁自己开了后门。
+    """
+    import stat
+    setup_project(tmp_path)
+    target = tmp_path / "main.py"
+    os.chmod(target, 0o644)
+
+    run_cmd(["lock", "--root", str(tmp_path)], cwd=tmp_path)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o444, "lock 后应为 444"
+
+    run_cmd(["unlock", "--root", str(tmp_path)], cwd=tmp_path)
+    mode = stat.S_IMODE(target.stat().st_mode)
+    assert mode & stat.S_IWUSR, "unlock 后属主必须可写"
+    assert not (mode & stat.S_IWGRP), f"unlock 不应放开 group 写位: {oct(mode)}"
+    assert not (mode & stat.S_IWOTH), f"unlock 不应放开 other 写位（world-writable）: {oct(mode)}"
+    assert mode == 0o644, f"应精确还原为 644，实际 {oct(mode)}"
+
+
+def test_unlock_without_mode_record_is_owner_write_only(tmp_path):
+    """无 mode 记录时（旧版 lock / 手工 chmod 444）解锁也应只给属主写权限"""
+    import stat
+    setup_project(tmp_path)
+    target = tmp_path / "main.py"
+    os.chmod(target, 0o444)  # 手工上锁，无 .pandaone/lock_modes.json 记录
+
+    run_cmd(["unlock", "--root", str(tmp_path)], cwd=tmp_path)
+    mode = stat.S_IMODE(target.stat().st_mode)
+    assert mode & stat.S_IWUSR
+    assert not (mode & stat.S_IWGRP) and not (mode & stat.S_IWOTH), f"实际 {oct(mode)}"
+
+
 def test_unlock_restores_writable(tmp_path):
     """unlock 后 .py 文件可写"""
     setup_project(tmp_path)
