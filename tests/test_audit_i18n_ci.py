@@ -76,23 +76,16 @@ def fresh_cli():
     第一性原理（对抗式审查）：
       - 多个测试调用 _inject_hardcoded，每次注入会增加 inject block
       - 如果 fresh_cli 只 backup 一次，后续测试的 backup 已是"已被污染"的状态
-      - 修复：从 git HEAD 读取原始 cli.py 作为 backup 起点
-    """
-    import subprocess
-    # 从 git HEAD 读取原始干净版本（避免被前一个测试污染）
-    try:
-        original = subprocess.run(
-            ["git", "show", "HEAD:src/pandaone/cli.py"],
-            cwd=str(REPO_ROOT),
-            capture_output=True, text=True, timeout=10,
-        )
-        if original.returncode == 0:
-            backup = original.stdout.encode("utf-8")
-        else:
-            backup = CLI.read_bytes()
-    except Exception:
-        backup = CLI.read_bytes()
 
+    v0.7.15 fix（数据丢失事故）：
+      - 之前 backup 从 `git show HEAD` 读取，finally 用 git HEAD 版本覆盖 cli.py。
+        任何开发者/Agent 对 cli.py 的**未提交修改**都会在跑测试时被静默回滚丢失
+        （v0.7.15 开发中真实发生过：cli.py 的 __main__ 修复被整个吃掉）。
+      - 现在 backup = 测试开始时的工作区内容（CLI.read_bytes()），
+        恢复的就是"测试前"状态，不再依赖 git HEAD。
+      - 跨测试污染由 _inject_hardcoded 的 marker 检查兜底（marker 缺失则 skip）。
+    """
+    backup = CLI.read_bytes()
     try:
         yield CLI
     finally:

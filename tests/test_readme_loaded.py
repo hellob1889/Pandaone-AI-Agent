@@ -35,8 +35,14 @@ def test_readme_file_exists():
 
 def test_cli_loads_readme_on_startup():
     """
-    RED 测试：CLI 无参数启动时必须读取 README，
-    输出应包含 README 的"当前阶段"段落标识。
+    v0.7.15 契约更新：非交互（管道/脚本/MCP）启动时**不**输出 README 噪音。
+
+    旧契约（每次启动强制打印 40+ 行 roadmap backlog）带来的问题：
+      - MCP 工具返回被噪音撑爆，LLM token 浪费
+      - 脚本/CI 管道 grep 不到关键输出
+      - 测试断言被噪音干扰
+    新契约：banner + README summary 只在 TTY 交互终端显示；
+    `load_readme_summary()` 函数本身仍可用（见下方直接调用测试）。
     """
     result = subprocess.run(
         [sys.executable, str(PANDAX)],
@@ -46,42 +52,61 @@ def test_cli_loads_readme_on_startup():
         timeout=10,
     )
 
-    # 失败当前：pandaone.py 还不存在，subprocess 会报 FileNotFoundError 或非零退出
     assert result.returncode == 0, (
         f"CLI 启动失败: rc={result.returncode}\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
 
-    # 必须显示 README 的当前阶段标识
-    assert "Phase" in result.stdout, (
-        f"CLI 启动输出未包含 README 当前阶段标识 'Phase'\n"
+    # 非交互输出必须是干净的：不包含 README summary 的 roadmap 标识
+    assert "Phase" not in result.stdout, (
+        f"非交互启动不应输出 README roadmap（v0.7.15 契约）\n"
         f"实际输出: {result.stdout}"
     )
+    # 无子命令时应有帮助输出
+    assert "usage" in result.stdout.lower(), f"应有帮助输出: {result.stdout}"
 
 
 def test_cli_shows_completed_steps():
     """
-    RED 测试：CLI 启动应显示已完成步骤列表（来自 README）。
+    v0.7.15 契约更新：TTY（pty）启动时显示 banner + README summary；
+    非交互下不显示（见 test_cli_loads_readme_on_startup）。
     """
-    result = subprocess.run(
-        [sys.executable, str(PANDAX)],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    if sys.platform == "win32":
+        pytest.skip("pty 仅 POSIX 可用")
 
-    assert result.returncode == 0, (
-        f"CLI 启动失败: rc={result.returncode}\n"
-        f"stderr: {result.stderr}"
-    )
+    import os as _os
+    import pty as _pty
 
-    # 必须包含"已完成的 Step"或类似标记（来自 README）
-    assert ("已完成" in result.stdout) or ("[x]" in result.stdout), (
-        f"CLI 启动输出未显示已完成步骤\n"
-        f"实际输出: {result.stdout}"
-    )
+    master, slave = _pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(PANDAX), "--version"],
+            cwd=str(ROOT),
+            stdout=slave,
+            stderr=slave,
+            stdin=slave,
+        )
+        _os.close(slave)
+        out = b""
+        try:
+            while True:
+                chunk = _os.read(master, 4096)
+                if not chunk:
+                    break
+                out += chunk
+        except OSError:
+            pass
+        proc.wait(timeout=10)
+    finally:
+        _os.close(master)
+
+    text = out.decode("utf-8", errors="replace")
+    assert proc.returncode == 0, f"CLI 启动失败: rc={proc.returncode}"
+    # TTY 下应显示 README summary 的阶段标识（交互场景保留）
+    assert "Phase" in text, f"TTY 启动应显示 README 阶段标识: {text!r}"
+    # 已完成步骤也应显示
+    assert ("已完成" in text) or ("[x]" in text), f"TTY 启动应显示已完成步骤: {text!r}"
 
 
 # ============================================================

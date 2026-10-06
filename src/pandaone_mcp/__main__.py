@@ -93,7 +93,7 @@ TOOLS = [
     },
     {
         "name": "pandaone_write",
-        "description": "审计写入（核心命令）：reason/problem/approach 必填；文本用 --old/--new 或 --content；二进制用 --from-file 或 --content-base64",
+        "description": "审计写入（核心命令）：reason/problem/approach 必填；文本用 --old/--new 或 --content；二进制用 --from-file 或 --content-base64。目标文件不存在时视为创建新文件（须提供内容且扩展名受保护，action=create）",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -271,17 +271,50 @@ def _args_from(params, mapping):
     return out
 
 
+def _server_version() -> str:
+    """动态读取版本（v0.7.15 fix）。
+
+    之前 serverInfo.version 硬编码 "0.7.7"，与包实际版本 (0.7.14) 漂移，
+    导致注册中心 / 客户端看到错误的版本。单一事实源 = pandaone 包版本
+    （pandaone/__init__.py 从 pyproject.toml / importlib.metadata 动态读取）。
+    """
+    try:
+        from pandaone import __version__ as v
+        return v
+    except Exception:
+        try:
+            from importlib.metadata import version as _v
+            return _v("pandaone-guard")
+        except Exception:
+            return "0.0.0"
+
+
+def _strip_ansi(s: str) -> str:
+    """移除 ANSI 转义序列（v0.7.15 fix）。
+
+    CLI 输出带 \\x1b[95m 等颜色码，对 LLM 是纯噪音且浪费 token。
+    """
+    import re as _re
+    return _re.compile(r"\x1b\[[0-9;]*[A-Za-z]").sub("", s)
+
+
 def _run_cli(args, timeout=10):
-    """调用 pandaone CLI，捕获 stdout/stderr/returncode"""
+    """调用 pandaone CLI，捕获 stdout/stderr/returncode
+
+    v0.7.15 fix:
+      - 加 `--silent`：跳过 banner + README summary（40+ 行 roadmap 噪音），
+        MCP 工具返回应只包含命令结果本身。
+      - strip ANSI 转义序列。
+    """
     try:
         r = subprocess.run(
-            ["pandaone"] + args,
+            ["pandaone", "--silent"] + args,
             capture_output=True, text=True, timeout=timeout,
         )
         return {
             "returncode": r.returncode,
-            "stdout": r.stdout,
-            "stderr": r.stderr,
+            "stdout": _strip_ansi(r.stdout),
+            "stderr": _strip_ansi(r.stderr),
         }
     except subprocess.TimeoutExpired:
         return {"returncode": -1, "stdout": "", "stderr": f"Timeout after {timeout}s"}
@@ -349,7 +382,7 @@ def _handle_request(req: dict) -> dict | None:
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "pandaone", "version": "0.7.7"},  # v0.7.7: 同步 pandaone-guard 版本
+            "serverInfo": {"name": "pandaone", "version": _server_version()},  # v0.7.15: 动态版本,不再硬编码
         }
         return _make_response(id_, result) if not is_notification else None
 

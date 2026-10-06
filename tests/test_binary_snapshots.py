@@ -48,14 +48,7 @@ def _git(*args, cwd, env_extra=None):
         env.update(env_extra)
     git_exe = shutil.which("git")
     if not git_exe:
-        # 探测常见路径
-        for cand in [r"D:\软件\Git\cmd\git.exe", r"C:\Program Files\Git\cmd\git.exe"]:
-            if Path(cand).exists():
-                git_exe = cand
-                env["PATH"] = str(Path(cand).parent) + os.pathsep + env["PATH"]
-                break
-    if not git_exe:
-        pytest.skip("git not found")
+        pytest.skip("git not found")  # v0.7.15: 移除作者机器路径硬编码，直接跳过
     r = subprocess.run([git_exe, *args], cwd=cwd, env=env, capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 

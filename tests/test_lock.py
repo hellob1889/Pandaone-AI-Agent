@@ -13,6 +13,7 @@ RED 测试：pandaone lock / unlock 子命令
   - 解锁后：写入应成功
   - 排除：__pycache__/test.py、_tmp_test.py 不应被锁
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 PANDAX = ROOT / "pandaone_dev.py"
+
+# root 用户不受文件权限位限制（444 文件依然可写），无法模拟 PermissionError。
+# 这是环境限制而非产品缺陷，L1 锁对普通用户依然有效。
+_ROOT_SKIP = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 用户不受权限位限制，无法验证 OS 级文件锁",
+)
 
 
 def run_cmd(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -44,6 +52,7 @@ def setup_project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@_ROOT_SKIP
 def test_lock_makes_files_readonly(tmp_path):
     """lock 后 .py 文件写入应失败"""
     setup_project(tmp_path)

@@ -5,6 +5,7 @@
   - 幂等:已正确配置的不重复添加
   - 不破坏现有规则:只在末尾追加缺失的
 """
+import shutil
 import subprocess
 from pathlib import Path
 import pytest
@@ -17,7 +18,10 @@ from pandaone.gitignore_helper import (
 )
 
 
-GIT_EXE = r"D:\软件\Git\cmd\git.exe"
+# v0.7.15 fix: 之前硬编码作者机器路径 `D:\软件\Git\cmd\git.exe`，
+# 在任何非作者机器（包括 CI 的 Linux runner）上 10 个用例全部 ERROR。
+# 改为动态探测 PATH 中的 git，与 conftest.py 的探测策略一致。
+GIT_EXE = shutil.which("git") or "git"
 
 
 def _git(args, cwd):
