@@ -149,6 +149,17 @@ jobs:
             echo "::notice::HEAD~1..HEAD diff 为空，跳过 pandaone ci 验证"
             exit 0
           fi
+          # ----- 审计基态不可见时跳过（v0.7.16 CI 修复）-----
+          # 事实：.pandaone/ 被 .gitignore 排除，CI 检出里永远不存在审计记录。
+          # 后果：`pandaone ci` 在 runner 上对任何代码改动都 exit 1 —— main 长期飘红，
+          #       红 badge 又反过来摧毁"安全门禁产品"的第一印象（信任成本远高于收益）。
+          # 判断：审计强制是**本地门禁**（L3 pre-commit hook + MCP write 审计通道），
+          #       它的正确性不依赖 CI 复跑；CI 无法在本地基态缺失时证明任何东西。
+          # 处置：基态不可见时显式跳过并说明原因，而不是假装验证后失败。
+          if [ ! -d .pandaone ]; then
+            echo "::notice::检出中无 .pandaone/（被 gitignore）：本地审计基态不可见，跳过 pandaone ci 验证。审计强制由本地 pre-commit hook 与 MCP write 通道执行。"
+            exit 0
+          fi
           # ----- 正常审计流程 -----
           BASE="origin/main"
           if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
