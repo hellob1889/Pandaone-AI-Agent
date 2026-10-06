@@ -2,6 +2,53 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.15] - 2026-10-04
+
+### 主题：AI Agent 真实体验修复 —「装上就能用，接上就干净」
+
+**背景**：GitHub 下载量 22 次 / 0 star / main CI 红。逐条复盘真实使用链路（pip install → MCP 接入 → 日常调用）后，发现的问题不在宣传的功能列表里，而在**第一次真实调用**上。本版本全部围绕「让 MCP 客户端和脚本拿到的输出干净、让 CLI 直调不失效」。
+
+### Fixed: CLI 直接运行静默 no-op（致命）
+
+`cli.py` 是 loader，通过 `exec()` 把 `cli_chunks/part_001-006.py` 编译进同一命名空间，但 exec 时把 `__name__` 覆写为 `"pandaone.cli"`，导致 `python cli.py` 的 `if __name__ == "__main__"` 永假——**直接运行 CLI 什么都不发生，exit code 0**。保存 `_is_main` 标记修复。这是比任何功能缺陷都严重的一类 bug：用户装完第一次敲命令就哑火。
+
+### Fixed: MCP 输出三重噪音（ANSI 转义 + banner + roadmap）
+
+MCP server 通过 subprocess 调 CLI 再回传 stdout，此前把 40+ 行彩色 banner、README 摘要、roadmap 一起塞给 MCP 客户端，污染模型上下文。修复：
+
+- `_run_cli` 统一加 `--silent`，并用 `_strip_ansi()` 剥离 ANSI 转义序列
+- CLI 的 banner / README 摘要改为**仅 TTY 输出**（`sys.stdout.isatty()` 门控）——人类在终端仍能看到完整 banner，管道和 MCP 拿到的只有结果
+
+### Added: write 审计通道支持新建文件
+
+此前 `write` 对不存在的文件直接 REJECTED（"目标文件不存在"），Agent 无法通过审计通道创建任何新文件。现在：提供 `--content` + 受保护扩展名即可创建，父目录自动补建，审计记录标注 `"action": "create"`。
+
+### Fixed: 只读检测在 root 下失效
+
+`os.access(path, os.W_OK)` 对 root 恒返回 True，导致 L1 锁（444 文件）对 root 不设防。改为直接检查权限位 `st_mode & S_IWUSR`。（注：OS 层面 root 物理上不受权限位约束，本修复保证 CLI 审计层行为一致；相关测试在 root 环境标记 skip。）
+
+### Improved: log / status 输出补全
+
+- `log` 打印此前为死代码的记录头（ID / 时间 / agent），字段标签本地化，新增 `Lines: +N -M` 与 Diff 面板（verbose 不截断）
+- `status` 补 L2 watchdog 区块（`os.kill(pid, 0)` 探活）与未 init 提示；计数标签本地化
+- `log` / `export` 未 init 时给出明确提示而非空输出
+
+### Fixed: MCP server 版本漂移
+
+`pandaone_mcp` 硬编码 `__version__ = "0.7.7"`，与实际包版本（0.7.14+）脱节 7 个版本。改为动态解析 `pandaone.__version__`，`serverInfo` 同步。
+
+### Fixed: 测试套件可移植性（CI 红的直接原因）
+
+- 5 个测试文件硬编码作者机器路径（`D:\软件\Git\cmd\git.exe`）→ `shutil.which("git")` 动态探测
+- 2 个静态分析测试读 `cli.py`（loader）而非 `cli_chunks/` → 修正读取方式
+- `test_audit_i18n_ci.py` 的 `fresh_cli` fixture 从 `git show HEAD` 恢复文件，会**静默回滚开发者未提交的修改**（本次开发中实际吃掉过一次修复）→ 改为备份工作区状态
+- install-git 测试的输出长度阈值按英文硬编码（>50），i18n 中文输出（38 字符）必挂 → 对齐为 >20
+- 权限类测试在 root 环境标记 skip（环境限制，非产品缺陷）
+
+### Fixed: 安装包缺文件
+
+`pyproject.toml` 补 `[tool.setuptools.package-data]`：`installer/windows/*.ps1`、`installer/macos/*.sh`、`installer/linux/*.sh` 随包分发，修复安装后右键菜单脚本缺失。
+
 ## [0.7.14-hotfix1] - 2026-09-21
 
 ### Fixed: 右键菜单子项不可见（ExtendedSubCommandsKey 迁移）

@@ -60,16 +60,22 @@ def _setup_with_audit(tmp_path):
 class TestExportSubcommand:
     """Bug #25 — `pandaone export` 应作为独立子命令存在"""
 
+    @staticmethod
+    def _cli_source() -> str:
+        """v0.7.15 fix: cli.py 是 chunk loader，实际代码在 cli_chunks/part_*.py"""
+        chunks = sorted((SRC_DIR / "pandaone" / "cli_chunks").glob("part_*.py"))
+        return "\n".join(p.read_text(encoding="utf-8") for p in chunks)
+
     def test_export_subcommand_exists_in_argparse(self):
-        """静态验证：cli.py argparse 中有 export_p = sub.add_parser('export', ...)"""
-        cli_src = (SRC_DIR / "pandaone" / "cli.py").read_text(encoding="utf-8")
+        """静态验证：argparse 中有 export_p = sub.add_parser('export', ...)"""
+        cli_src = self._cli_source()
         assert re.search(
             r'sub\.add_parser\(\s*"export"', cli_src,
-        ), "Bug #25 回归：cli.py argparse 中没有 export 子命令"
+        ), "Bug #25 回归：argparse 中没有 export 子命令"
 
     def test_export_registered_in_commands_dict(self):
         """静态验证：COMMANDS 字典中 export 映射到 cmd_export"""
-        cli_src = (SRC_DIR / "pandaone" / "cli.py").read_text(encoding="utf-8")
+        cli_src = self._cli_source()
         # COMMANDS = { ... "export": cmd_export ... }
         m = re.search(r'COMMANDS\s*=\s*\{[^}]*"export"\s*:\s*(\w+)', cli_src, re.DOTALL)
         assert m, "Bug #25 回归：COMMANDS 中找不到 'export' 键"

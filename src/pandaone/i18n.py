@@ -108,12 +108,24 @@ TRANSLATIONS = {
         "_status_binary_disabled": "未启用二进制保护(--no-binary 或 init 在 Phase 5 之前)",
 
         # Bug #17 fix: 审计统计状态计数用本地化标签
+        # v0.7.15: 未授权标签附带英文状态码，便于 CI/报告交叉引用
         "status_count_approved": "  - 已批准: {n}",
         "status_count_rejected": "  - 已拒绝: {n}",
-        "status_count_unauthorized": "  - 未授权: {n}",
+        "status_count_unauthorized": "  - 未授权 (UNAUTHORIZED): {n}",
 
         # Bug #14 fix: log 输出中硬编码的 id=/file= 标签本地化
         "log_record_header": "[{ts}] {status}  {id_label}={rid}  {file_label}={file_}",
+        # v0.7.15: log 面板字段标签完整本地化
+        "log_label_file": "文件",
+        "log_label_commit": "提交",
+        "log_label_reason": "原因",
+        "log_label_problem": "问题",
+        "log_label_approach": "方法",
+        "log_label_rejection": "拒绝原因",
+        "log_label_lines": "变更行",
+        "log_label_diff": "变更内容 (Diff):",
+        "log_not_initialized": "[ERROR] 未初始化：未找到 {path}，请先运行: pandaone init --root <目录>",
+        "status_not_initialized": "[ERROR] {root} 未初始化 Pandaone，请先运行: pandaone init --root {root}",
 
         # ============ write ============
         "err_write_root_not_init": "[ERROR] {root} 未初始化 Pandaone，请先运行: pandaone init --root <path>",
@@ -468,6 +480,17 @@ TRANSLATIONS = {
 
         # Bug #14 fix: log 输出中硬编码的 id=/file= 标签本地化
         "log_record_header": "[{ts}] {status}  {id_label}={rid}  {file_label}={file_}",
+        # v0.7.15: log panel field labels (en)
+        "log_label_file": "File",
+        "log_label_commit": "Commit",
+        "log_label_reason": "Reason",
+        "log_label_problem": "Problem",
+        "log_label_approach": "Approach",
+        "log_label_rejection": "Rejection",
+        "log_label_lines": "Lines",
+        "log_label_diff": "Diff:",
+        "log_not_initialized": "[ERROR] Not initialized: audit log not found at {path}. Run: pandaone init --root <dir>",
+        "status_not_initialized": "[ERROR] {root} not initialized as Pandaone project, please run: pandaone init --root {root}",
 
         # ============ write ============
         "err_write_root_not_init": "[ERROR] {root} not initialized as Pandaone project, please run: pandaone init --root <path>",

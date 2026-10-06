@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pandaone-guard"
-version = "0.7.14"
+version = "0.7.15"
 description = "AI Agent code audit gateway (Pandaone AI Agent) - OS-level mandatory review of every code change"
 readme = {file = "README.md", content-type = "text/markdown"}
 license = "MIT"
@@ -47,3 +47,18 @@ download = [
 pandaone = "pandaone.__main__:main"
 pandaone-guard = "pandaone_guard:main"
 pandaone-mcp = "pandaone_mcp:main"
+
+# v0.7.15 fix: wheel 必须包含右键菜单安装脚本与模板（test_installer_dir 回归）
+[tool.setuptools.package-data]
+pandaone = [
+    "banner.txt",
+    "*.ico",
+    "index.html",
+    "templates/*",
+    "installer/windows/*.ps1",
+    "installer/macos/*.sh",
+    "installer/macos/*.workflow/**",
+    "installer/linux/*.sh",
+    "installer/linux/*/*.desktop",
+    "installer/*.iss",
+]

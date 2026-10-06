@@ -12,6 +12,7 @@ Phase 4.6 — 验证 Pandaone AI Agent 保护范围扩展到所有文本文件�
   - 缓解：扩展 protected_extensions 默认列表
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,13 @@ import pytest
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SRC_DIR = ROOT_DIR / "src"
+
+# root 用户不受文件权限位限制（444 文件依然可写），无法模拟 PermissionError。
+# 这是环境限制而非产品缺陷，L1 锁对普通用户依然有效。
+_ROOT_SKIP = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 用户不受权限位限制，无法验证 OS 级文件锁",
+)
 
 
 def _run_cli(*args, cwd=None, env_extra=None):
@@ -104,6 +112,7 @@ class TestInitCustomExtensions:
 class TestLockMultipleExtensions:
     """lock 应覆盖所有 protected_extensions（不只看 .py）"""
 
+    @_ROOT_SKIP
     def test_lock_locks_md_files(self, tmp_path):
         """lock 后 .md 文件应不可写"""
         import os
@@ -120,6 +129,7 @@ class TestLockMultipleExtensions:
         # 恢复权限以便清理
         os.chmod(md_file, 0o666)
 
+    @_ROOT_SKIP
     def test_lock_locks_json_files(self, tmp_path):
         """lock 后 .json 文件应不可写"""
         import os
@@ -133,6 +143,7 @@ class TestLockMultipleExtensions:
             json_file.write_text("{}", encoding="utf-8")
         os.chmod(json_file, 0o666)
 
+    @_ROOT_SKIP
     def test_lock_locks_yml_files(self, tmp_path):
         """lock 后 .yml 文件应不可写"""
         import os
@@ -236,6 +247,7 @@ class TestWriteMultipleExtensions:
 class TestCustomExtOverDefault:
     """--ext 应覆盖默认（不留旧默认）"""
 
+    @_ROOT_SKIP
     def test_custom_ext_drops_default_py(self, tmp_path):
         """指定 --ext .foo 后，.py 不应再受保护"""
         (tmp_path / "main.py").write_text("", encoding="utf-8")

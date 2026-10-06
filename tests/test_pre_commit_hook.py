@@ -20,16 +20,16 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 SRC_DIR = ROOT_DIR / "src"
 HOOK_SRC = ROOT_DIR / "src" / "pandaone" / "templates" / "pre-commit-hook"
 
-GIT_CANDIDATES = [
-    r"D:\软件\Git\cmd\git.exe",
-    r"C:\Program Files\Git\cmd\git.exe",
-    r"C:\Program Files (x86)\Git\cmd\git.exe",
-]
+import shutil as _shutil
+
+# v0.7.15 fix: 之前硬编码作者机器路径 `D:\软件\Git\cmd\git.exe`，
+# 在任何非作者机器上全部失败。改为动态探测 PATH。
+GIT_CANDIDATES = [_shutil.which("git")] if _shutil.which("git") else []
 
 
 def _git_exe():
     for c in GIT_CANDIDATES:
-        if Path(c).exists():
+        if c:
             return c
     pytest.skip("git not found")
 

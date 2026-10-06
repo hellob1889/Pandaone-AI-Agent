@@ -306,7 +306,18 @@ def main(argv=None):
     else:
         if not check_fingerprint():
             return 1
-    if not getattr(args, "silent", False):
+    # v0.7.15 UX fix: banner + README summary 只在交互终端 (TTY) 输出。
+    #   之前任何命令都强制打印 40+ 行 roadmap backlog 噪音,导致:
+    #   - MCP 工具返回被噪音+ANSI 撑爆 (LLM token 浪费)
+    #   - 脚本/CI 管道 grep 不到关键输出
+    #   - 测试断言被噪音干扰
+    #   `--silent` 仍然保留为显式关闭开关 (右键菜单继续使用)。
+    _is_tty = False
+    try:
+        _is_tty = sys.stdout.isatty()
+    except Exception:
+        _is_tty = False
+    if not getattr(args, "silent", False) and _is_tty:
         banner = load_banner()
         for line in banner:
             print(line)
