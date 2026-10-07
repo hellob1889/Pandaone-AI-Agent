@@ -138,6 +138,10 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 
 #### 30 秒上手（第一次用请先看这里）/ 30-Second Start
 
+> ⚠️ **包名提醒**：本包在 PyPI 上的名字是 **`pandaone-guard`**。
+> 旧名 **`pandax-guard` 已弃用**（停在 0.7.4，不再更新，也不再修 bug）——如果你之前装过它，请先卸载：
+> `pip uninstall pandax-guard && pip install pandaone-guard`
+
 ```bash
 # 1) 装（10 秒）
 pip install pandaone-guard
@@ -467,6 +471,10 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 6. Runs `doctor.py --fix --persist-path` (auto-fix remaining issues: deps / setuptools / fingerprint / persist PATH to HKCU)
 
 ### 30-Second Start (start here if you're new)
+
+> ⚠️ **Package name**: on PyPI this package is **`pandaone-guard`**.
+> The legacy name **`pandax-guard` is deprecated** (frozen at 0.7.4, no fixes). If you installed it before, switch now:
+> `pip uninstall pandax-guard && pip install pandaone-guard`
 
 ```bash
 # 1) Install (10s)
