@@ -98,18 +98,51 @@ def _apply_readonly(args, readonly: bool) -> int:
     protected_extensions = config.get("protected_extensions", [".py"])
 
     count = 0
+    # v0.7.16 fix: unlock 不再一律加 group/other 写位（444 → 666 world-writable）。
+    #   lock 会清除三种写位，原始 mode 就此丢失；解锁时若无记录只能猜。
+    #   方案：lock 时把每个文件的原始 mode 记入 .pandaone/lock_modes.json，
+    #         unlock 时精确还原；无记录（旧版本 lock / 手工 chmod）时退化为
+    #         "仅恢复属主写位、不加 group/other 写位"（默认 644，不 world-writable）。
+    modes_path = root / ".pandaone" / "lock_modes.json"
+    saved_modes: dict = {}
+    if not readonly and modes_path.exists():
+        try:
+            saved_modes = json.loads(modes_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            saved_modes = {}
+
     # Bug #2 fix: 用 _iter_protected_files 共享 helper（避免与 cmd_status 行为漂移）
     for target_file in _iter_protected_files(root, config):
         try:
             current_mode = target_file.stat().st_mode
+            rel_key = target_file.relative_to(root).as_posix()
             if readonly:
+                # 记录原始 mode 后再上锁（仅记录尚未上锁的文件，避免二次 lock 覆盖成 444）
+                if current_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+                    saved_modes[rel_key] = stat.S_IMODE(current_mode)
                 new_mode = current_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH
             else:
-                new_mode = current_mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+                if rel_key in saved_modes:
+                    # 精确还原锁定前的 mode
+                    new_mode = (current_mode & ~0o777) | int(saved_modes[rel_key])
+                else:
+                    # 无记录：只恢复属主写位，绝不补 group/other 写位
+                    new_mode = (current_mode | stat.S_IWUSR) & ~stat.S_IWGRP & ~stat.S_IWOTH
             os.chmod(target_file, new_mode)
             count += 1
         except OSError as e:
             print(t("warn_lock_failed", file=target_file, err=e))
+
+    # 持久化 mode 记录（lock 时写入；unlock 后清理，避免陈旧记录影响后续）
+    try:
+        if readonly:
+            modes_path.write_text(
+                json.dumps(saved_modes, ensure_ascii=False), encoding="utf-8"
+            )
+        elif modes_path.exists():
+            modes_path.unlink()
+    except OSError:
+        pass
 
     action = "锁定" if readonly else "解锁"
     ext_list = ", ".join(protected_extensions)
@@ -310,7 +343,10 @@ def cmd_write(args):
         target.parent.mkdir(parents=True, exist_ok=True)
     else:
         mode = target.stat().st_mode
-        writable_mode = mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+        # v0.7.16: 只加属主写位（旧实现同时开 group/other → 写入期间文件 world-writable）。
+        #   finally 会把 mode 原样还原，这里只需让本次写入通行；
+        #   非属主且非 root 的进程本就无法 chmod/chmod 后写入，多开写位毫无意义。
+        writable_mode = mode | stat.S_IWUSR
         os.chmod(target, writable_mode)
 
     # 准备 step 4→5 的 try/finally 块：

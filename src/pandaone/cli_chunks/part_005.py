@@ -157,6 +157,13 @@ def cmd_ci(args):
     config_path = pandaone_dir / "config.json"
     try:
         config = _json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # v0.7.16 fix: 目录存在但 config.json 缺失 ≠ 文件损坏。
+        # 典型场景：CI 检出里 .pandaone/ 只有曾经被提交过的 pandaone.jsonl，
+        # config.json 从未入库（gitignore）。旧实现报 "config.json corrupted →
+        # 请运行 init --force-reset"，误导用户去重置一个本就不存在的配置。
+        print(t("ci_reject_no_init", root=root))
+        return 1
     except (_json.JSONDecodeError, OSError) as e:
         print(t("err_config_corrupted", err=e))
         return 1

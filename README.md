@@ -134,6 +134,38 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 5. 验证 pandaone 可用（`python -m pandaone --version`）
 6. 调用 `doctor.py --fix --persist-path` 自动修复剩余问题（依赖、setuptools、指纹、PATH 持久化到 HKCU）
 
+#### 30 秒上手（第一次用请先看这里）/ 30-Second Start
+
+```bash
+# 1) 装（10 秒）
+pip install pandaone-guard
+
+# 2) 在你的项目里初始化（1 秒）——会生成 .pandaone/ 审计目录
+cd your-project && pandaone init --root .
+
+# 3) 把 MCP 接到你的 AI IDE（Claude / Cursor / Trae / ChatGPT 都行）
+```
+
+MCP 配置（`/ claude_desktop_config.json`、`Cursor MCP 配置`）：
+
+```json
+{ "mcpServers": { "pandaone": { "command": "pandaone-mcp" } } }
+```
+
+然后直接对 AI 说一句话就够了：
+
+> 把 `main.py` 里的 `hi` 改成 `hello`，说明你为什么改。
+
+AI 会**被迫**走审计通道（`pandaone_write`）：必须填「原因 / 解决什么问题 / 采用什么方法」三件套。合规的改动才被写入 + 自动 git commit + 留痕；不合规的改动被拒绝，同样留痕。
+
+```bash
+pandaone log --root .      # 查看审计记录（谁改了什么、为什么）
+pandaone status --root .   # 查看当前保护状态与 watchdog
+pandaone log --root . --export report.html   # 导出 HTML 报告
+```
+
+想先手动挡住 AI 的写操作？`pandaone lock --root .` 把受保护文件设为只读（OS 级，绕过不了）；`pandaone unlock --root .` 还原。**注意：请以普通用户运行，root 下 OS 权限位对其无效。**
+
 #### 环境诊断（任何时候都能跑）/ Environment Diagnostics (run anytime)
 
 ```bash
@@ -431,6 +463,36 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 4. `pip install -e .` local source editable install
 5. Verifies pandaone works (`python -m pandaone --version`)
 6. Runs `doctor.py --fix --persist-path` (auto-fix remaining issues: deps / setuptools / fingerprint / persist PATH to HKCU)
+
+### 30-Second Start (start here if you're new)
+
+```bash
+# 1) Install (10s)
+pip install pandaone-guard
+
+# 2) Init inside your project (1s) — creates the .pandaone/ audit directory
+cd your-project && pandaone init --root .
+
+# 3) Wire MCP into your AI IDE (Claude / Cursor / Trae / ChatGPT)
+```
+
+```json
+{ "mcpServers": { "pandaone": { "command": "pandaone-mcp" } } }
+```
+
+Then just say one sentence to your AI:
+
+> Change `hi` to `hello` in `main.py`, and tell me why.
+
+The AI is **forced** through the audit channel (`pandaone_write`): it must supply reason / problem / approach. Compliant edits are written, auto-committed and logged; non-compliant ones are rejected — and logged too.
+
+```bash
+pandaone log --root .      # who changed what, and why
+pandaone status --root .   # protection status + watchdog
+pandaone log --root . --export report.html   # HTML report
+```
+
+Want to hard-block AI writes first? `pandaone lock --root .` makes protected files read-only at OS level (unbypassable); `pandaone unlock --root .` restores them. **Run as a normal user — OS permission bits do not apply to root.**
 
 ### Environment diagnostics (run anytime)
 

@@ -2,6 +2,25 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.16] - 2026-10-07
+
+### Fixed: unlock 不再把受保护文件变成 world-writable（安全缺陷）
+
+**问题**：`unlock` 用 `mode | S_IWUSR | S_IWGRP | S_IWOTH` 解除只读，把 444 解成 **666** —— 门禁自己给同机任意用户开了写后门。而 `lock` 会清除全部三种写位，原始权限就此丢失，解锁时无从还原。
+
+**修复**（`src/pandaone/cli_chunks/part_003.py`）：
+
+| 场景 | 行为 |
+|------|------|
+| lock | 上锁前把每个文件的原始 mode 记入 `.pandaone/lock_modes.json` |
+| unlock（有记录） | 精确还原锁定前的 mode（644 → lock 444 → unlock 644） |
+| unlock（无记录，旧版 lock / 手工 chmod） | 只恢复属主写位，绝不补 group/other（默认 644） |
+| write 通道临时解锁 | 由 `\|USER\|GROUP\|OTHER` 收窄为只加 `S_IWUSR`，缩短 world-writable 暴露窗口 |
+
+`.pandaone/lock_modes.json` 随 unlock 完成后清理，避免陈旧记录影响后续轮次。
+
+新增两条回归测试：精确还原 644、无记录退化为属主可写。
+
 ## [0.7.15] - 2026-10-04
 
 ### 主题：AI Agent 真实体验修复 —「装上就能用，接上就干净」
