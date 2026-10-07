@@ -129,6 +129,29 @@ def _print_log(records):
             print(f"{t('log_label_approach')}: {rec.get('approach', '')}")
         elif status == "REJECTED":
             print(f"{t('log_label_rejection')}: {rec.get('rejection_reason', '')}")
+            # v0.7.18 fix: 渲染 attempted_* ——「被拒绝的那次到底想写什么」。
+            #
+            # 背景：审计记录在写入被拒时**已经**保存了 attempted_reason /
+            # attempted_problem / attempted_approach（见 part_003 的 REJECTED 分支），
+            # 翻译 key `log_attempted` 也早就在 i18n 双语包里定义好了 ——
+            # 但 `_print_log` 从来没有调用过它，这条翻译是一条**死翻译**。
+            #
+            # 后果（对审计产品是实质缺陷）：被拒绝的写入只留一句"为什么拒绝"，
+            # 不留"当时想写什么"。审计留痕最关键的那一半丢了 ——
+            # 事后复盘时你能看到"这次被拦了"，却看不到"被拦的是什么"。
+            #
+            # 暴露方式：tests/test_e2e.py::test_full_workflow_e2e 断言
+            # `log --rejected` 输出含 "attempted"/"尝试"。该测试长期在 CI 上
+            # （非 root runner）真实执行并失败，但 publish.yml 的 test job
+            # 不接 `needs`，失败既不阻塞发布也无人查看；
+            # 本地跑则因 euid==0 被 `_ROOT_SKIP` 静默跳过 —— 两头都看不见。
+            if any(rec.get(k) for k in ("attempted_reason", "attempted_problem", "attempted_approach")):
+                print(t(
+                    "log_attempted",
+                    reason=rec.get("attempted_reason") or "-",
+                    problem=rec.get("attempted_problem") or "-",
+                    approach=rec.get("attempted_approach") or "-",
+                ))
         # v0.7.15: 补上 v0.7.3 承诺的面板特性 — 行数统计 + diff 内容段。
         #   之前面板只显示文件/提交/原因，看不到改了什么（RED 测试悬空至今）。
         _added = rec.get("lines_added", 0) or 0

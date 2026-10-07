@@ -126,17 +126,29 @@ jobs:
         shell: bash
 
   # ========================================
-  # Job 3: 单元测试（仅冒烟测试，不在 lint 流程做完整测试矩阵）
+  # Job 3: 测试（冒烟 + 完整套件 + 真实安装）
   # ========================================
-  # 第一性原理：
-  #   lint 流程的本职是 i18n 合规审查 + 快速冒烟，不是完整测试矩阵。
-  #   完整测试（3 OS × 3 Python = 9 矩阵）在 publish.yml 跑，gate 发布。
-  #   lint 这里只跑一个 ubuntu + 3.11 的最小冒烟，快速反馈 i18n 之外没有
-  #   把整个项目搞坏；如果只想跑特定测试，用 pytest --ignore 灵活配置。
+  # 第一性原理（v0.7.18 重写——旧注释写的事实是错的）：
+  #
+  #   旧注释：「完整测试（3 OS × 3 Python = 9 矩阵）在 publish.yml 跑，gate 发布。」
+  #   实际核对 publish.yml：**从来没有 9 矩阵**，只有一个 ubuntu + 3.10 单跑；
+  #   而且 publish job 的 `needs` 是 `[build]` —— **测试失败并不阻止发布**。
+  #
+  #   于是"完整测试"在结构上一直是个装饰品：
+  #     · PR 阶段只跑 3 个测试文件的冒烟 → 改坏 tests/ 下其余 40 个文件的 PR 照样合进 main
+  #     · 发版时跑一次全量 → 挂了也不拦发布，只在日志里留一行红，发版照常继续
+  #
+  #   这与 v0.7.16（`.pandaone/` 半存在）、v0.7.17（editable 冒烟绕开打包路径）
+  #   修的是**同一病根的第三次复发**：验证手段与真实使用场景脱节，且没人断言过
+  #   「这个检查到底 gate 了什么」。
+  #
+  #   处置：把完整测试套件**前移**到 PR 阶段，并入本 job（规则集必需状态检查
+  #   "Smoke Tests"），改坏任何一个测试的 PR 在合并前就被拦住。
+  #   发版前 publish.yml 里那次运行降级为二次确认，并接上 needs 真正 gate 发布。
   test:
     name: Smoke Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15  # v0.7.18: 5 → 15，本 job 现在含完整套件（约 75s）+ 真实安装
 
     steps:
       - name: Checkout code
@@ -166,6 +178,39 @@ jobs:
             tests/test_version_single_source.py \
             --tb=short -q --timeout=30 -p no:cacheprovider --no-header
         shell: bash
+
+      - name: 完整测试套件（PR gate —— v0.7.18 前移自 publish.yml）
+        # 背景：此前 377 个测试只在打 tag 发版时跑一次，而 publish job 的 needs 是
+        #   [build] —— 测试挂了照样发版。PR 阶段只跑 3 个文件的冒烟，于是
+        #   「改坏 tests/ 下 40 个文件里的任何一个」都能顺利合进 main，
+        #   直到发版那一刻才（可能）被发现，而那时已经拦不住了。
+        #
+        # 这里把完整套件前移：弄坏测试的 PR 在**合并前**就被拦住。
+        # 本地实测（editable 安装 / Python 3.11）：364 passed, 13 skipped，约 73s。
+        #
+        # 排除项是有据的，不是迷信（源自 commit 541d50c
+        # "ci(pypi): pytest timeout 60s + exclude hang-prone watchdog/serve tests"）：
+        #   tests/test_watchdog.py / tests/test_watchdog_dedupe.py
+        #   用线程 + 时序断言，在共享 runner 上会偶发挂住，曾拖垮整个发版流程。
+        #   它们仍由本地全量回归覆盖（本地跑 377P/13S/0F 全绿）。
+        # 另：publish.yml 里还有一条 --ignore=tests/test_pandaone_serve.py，
+        #     该文件早已改名为 test_pandax_serve.py —— 死参数，本版本一并清掉。
+        run: |
+          set -o pipefail
+          python -m pytest tests/ \
+            --ignore=tests/test_watchdog.py \
+            --ignore=tests/test_watchdog_dedupe.py \
+            --timeout=60 --timeout-method=thread \
+            -q --tb=short --no-header -p no:cacheprovider 2>&1 | tee /tmp/pytest-full.log
+        shell: bash
+
+      - name: 上传完整测试日志
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-full-log
+          path: /tmp/pytest-full.log
+          if-no-files-found: ignore
 
       - name: 真实安装冒烟（pip install . —— 防"装了跑不起来"复发）
         # v0.7.16 新增。
