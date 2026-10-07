@@ -2,6 +2,38 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.17] - 2026-10-07
+
+### Added: CI 真实安装冒烟关卡（防「装上了跑不起来」复发）
+
+**动机**：v0.7.14 的致命缺陷是用户 `pip install` 之后 CLI 跑不起来。复盘发现 CI 里
+唯一的冒烟用的是 **editable 安装**（`pip install -e .`）——它直接从源码目录 import，
+**绕开整个 wheel 打包路径**，因此 package-data 漏配、入口点写错、子包没打进 wheel
+这几类问题在结构上永远不可能被 editable 冒烟发现。CI 全程绿，用户第一分钟就崩。
+
+**处置**：在 `lint.yml` 的 Smoke Tests job（仓库规则集的必需状态检查）里补一步
+**非 editable 真实安装**：
+
+```
+python -m venv … && pip install .   # 真正走 wheel
+pandaone --help                      # CLI 可执行
+command -v pandaone-mcp              # MCP 入口点在
+已装版本 == pyproject 声明版本        # 版本漂移
+```
+
+这一步复现的就是真实用户的第一分钟，且因为挂在必需检查上，**装坏了就合不进 main**。
+
+### Changed: `pandax-guard` 弃用声明
+
+PyPI 上的旧包名 **`pandax-guard` 已弃用**（停在 0.7.4，不再更新也不再修 bug）。
+README 中英文双语顶部均加入醒目提示，并给出迁移命令：
+
+```bash
+pip uninstall pandax-guard && pip install pandaone-guard
+```
+
+避免新用户搜到旧包装上，得到一份 2026-09 的、带已知缺陷的实现。
+
 ## [0.7.16] - 2026-10-07
 
 ### Fixed: unlock 不再把受保护文件变成 world-writable（安全缺陷）

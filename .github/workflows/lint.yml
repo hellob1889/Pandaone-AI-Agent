@@ -167,6 +167,46 @@ jobs:
             --tb=short -q --timeout=30 -p no:cacheprovider --no-header
         shell: bash
 
+      - name: 真实安装冒烟（pip install . —— 防"装了跑不起来"复发）
+        # v0.7.16 新增。
+        #
+        # 背景（第一英里断裂的完整复盘，见 CHANGELOG v0.7.15）：
+        #   v0.7.14 的致命缺陷是"用户 pip install 之后 CLI 跑不起来"。
+        #   而本 job 上面那一步用的是 **editable 安装**（pip install -e .），
+        #   它直接从源码目录 import，**绕过了整个 wheel 打包路径**——
+        #   package-data 漏配、入口点写错、子包没被打进 wheel，editable 全都不会暴露。
+        #   也就是说：CI 全程绿的那一类"装了跑不起来"，editable 冒烟在结构上发现不了。
+        #
+        # 所以这里在独立 venv 里做一次**非 editable** 的真实安装，再跑 CLI：
+        #   pip install . → pandaone --help → 版本与 pyproject 对齐
+        # 这一步复现的就是真实用户的第一分钟。
+        run: |
+          set -e
+          python -m venv /tmp/pandaone-install-smoke
+          . /tmp/pandaone-install-smoke/bin/activate
+          python -m pip install --upgrade pip
+          pip install .
+
+          echo "--- CLI 可执行性 ---"
+          pandaone --help
+          command -v pandaone-mcp >/dev/null || { echo "::error::pandaone-mcp 入口点未安装"; exit 1; }
+          echo "pandaone-mcp 入口点: $(command -v pandaone-mcp)"
+
+          echo "--- 版本一致性（装到的 == 声明的）---"
+          python - <<'PY'
+          import importlib.metadata as md, pathlib, re
+          installed = md.version("pandaone-guard")
+          declared = re.search(
+              r'^version\s*=\s*"([^"]+)"',
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8"),
+              re.M,
+          ).group(1)
+          print(f"installed={installed} declared={declared}")
+          if installed != declared:
+              raise SystemExit(f"版本漂移: 装到的是 {installed}，pyproject 声明 {declared}")
+          PY
+        shell: bash
+
   # ========================================
   # Job 4: 整体汇总（PR 评论区输出）
   # ========================================
