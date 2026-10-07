@@ -137,7 +137,12 @@ jobs:
         id: pytest
         run: |
           set -o pipefail
-          pytest tests/ -v --timeout=60 --timeout-method=thread -x --ignore=tests/test_watchdog.py --ignore=tests/test_watchdog_dedupe.py --ignore=tests/test_pandaone_serve.py 2>&1 | tee /tmp/pytest.log
+          # v0.7.18：清掉 --ignore=tests/test_pandaone_serve.py（该文件早已改名
+          # 为 test_pandax_serve.py，这条 ignore 近年来一直指向不存在的文件）。
+          # 保留 watchdog 两个的排除：见 commit 541d50c，hang-prone。
+          # 完整套件自 v0.7.18 起**已在 PR 阶段**跑（lint.yml Smoke Tests job），
+          # 这里是对即将发布的 tag 做一次二次确认。
+          pytest tests/ -v --timeout=60 --timeout-method=thread -x --ignore=tests/test_watchdog.py --ignore=tests/test_watchdog_dedupe.py 2>&1 | tee /tmp/pytest.log
           echo "PYTEST_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
         continue-on-error: true
 
@@ -157,8 +162,17 @@ jobs:
 
   publish:
     name: Publish
-    # Decouple publish from test: build artifact is the source of truth for shipping
-    needs: [build]
+    # v0.7.18：把 test 接回 needs，让测试真正 gate 发布。
+    #
+    # 旧注释写的是 "Decouple publish from test: build artifact is the source of
+    # truth for shipping"（needs: [build]）。解耦的初衷是"别让测试环境的抖动
+    # 阻塞发版"，但副作用是：pytest 挂了照样把包推上 PyPI —— 一个**红着的
+    # 测试套件**和一个**已发布的版本**可以同时存在，测试沦为纯装饰。
+    #
+    # 现在完整套件已经前移到 PR 阶段（lint.yml），发版时这里是同一套件的二次
+    # 确认，flaky 风险与 PR 阶段同量级；把它接回 needs，才能让它真的拦住
+    # "带着失败测试发版"这最后一公里的错误。
+    needs: [build, test]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # No `environment:` to match PyPI Trusted Publisher (configured without environment)

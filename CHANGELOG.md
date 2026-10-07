@@ -2,6 +2,50 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.18] - 2026-10-07
+
+### Changed: 完整测试套件前移到 PR 阶段（测试不再是个装饰品）
+
+**发现**：核对 CI 实际配置时，`lint.yml` 的注释写着
+
+> 完整测试（3 OS × 3 Python = 9 矩阵）在 publish.yml 跑，gate 发布。
+
+这句话里有**两个事实错误**：
+
+1. `publish.yml` 里从来没有 9 矩阵 —— 只有一个 ubuntu + Python 3.10 单跑一次；
+2. 更关键的是，`publish` job 的 `needs` 写的是 `[build]`，**不包含 `test`**
+   —— 也就是说 pytest 挂了照样把包推上 PyPI。
+
+于是"完整测试"在结构上一直是装饰品，两头都不 gate：
+
+| 阶段 | 跑什么 | 实际 gate 了什么 |
+|------|--------|------------------|
+| PR（`lint.yml` Smoke Tests） | 3 个测试文件的冒烟 | 只拦住这 3 个文件被改坏 |
+| 发版（`publish.yml` test job） | 全量 377 个测试 | **什么都不拦**（不接 `needs`） |
+
+后果：改坏 `tests/` 下其余 40 个文件里任何一个的 PR 都能顺利合进 main，
+直到发版那一刻才（可能）被发现 —— 而那时发布流程已经拦不住了。
+
+**这是与 v0.7.16、v0.7.17 同一病根的第三次复发**：验证手段与真实场景脱节，
+且从来没有人断言过"这个检查到底 gate 了什么"。前两次分别是
+`.pandaone/` 半存在（跳过条件永远不触发）与 editable 冒烟绕开打包路径。
+
+**处置**：
+
+1. `lint.yml` 的 Smoke Tests job（规则集**必需**状态检查）新增一步
+   **完整测试套件** —— 改坏任何一个测试的 PR 在合并前就被拦住。
+   本地实测：editable 安装 / Python 3.11 下 `364 passed, 13 skipped`，约 73 秒
+   （job timeout 相应从 5 分钟放宽到 15 分钟）。
+2. `publish.yml` 的 `publish` job 改为 `needs: [build, test]`，
+   让发版前的那次全量运行真正能拦住"带着失败测试发版"。
+
+**排除项说明**（有据，不是迷信）：`tests/test_watchdog.py` 与
+`tests/test_watchdog_dedupe.py` 使用线程 + 时序断言，在共享 runner 上会偶发挂住
+（源自 commit `541d50c`「exclude hang-prone watchdog/serve tests」），继续排除，
+仍由本地全量回归覆盖（本地跑含这两个文件是 377P/13S/0F）。
+同时清掉 `--ignore=tests/test_pandaone_serve.py` —— 该文件早已改名为
+`test_pandax_serve.py`，这条参数近年来一直指向一个不存在的文件。
+
 ## [0.7.17] - 2026-10-07
 
 ### Added: CI 真实安装冒烟关卡（防「装上了跑不起来」复发）
