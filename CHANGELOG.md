@@ -46,6 +46,33 @@ All notable changes to Pandaone AI Agent will be documented in this file.
 同时清掉 `--ignore=tests/test_pandaone_serve.py` —— 该文件早已改名为
 `test_pandax_serve.py`，这条参数近年来一直指向一个不存在的文件。
 
+### Fixed: `pandaone log --rejected` 补上「当时想写什么」（死翻译接线）
+
+新关卡第一次运行就抓到的真 bug —— 也正是"完整测试前移"这件事价值的直接证据。
+
+`tests/test_e2e.py::test_full_workflow_e2e` 断言 `log --rejected` 的输出里
+要有 `attempted` / `尝试` 字段，在 CI 上一直是**失败**的。原因是：
+
+- 审计记录在写入被拒时**确实保存**了 `attempted_reason` / `attempted_problem` /
+  `attempted_approach`（`part_003` 的 REJECTED 分支）；
+- 翻译 key `log_attempted` 也**确实定义**在 i18n 双语包里；
+- 但 `_print_log` **从来没有调用过它** —— 这是一条**死翻译**。
+
+后果对审计产品是实质缺陷：被拒绝的写入只留一句"为什么拒绝"，不留"当时想写什么"。
+审计留痕最关键的那一半丢了 —— 事后复盘能看到"这次被拦了"，却看不到"被拦的是什么"。
+
+**它是怎么藏这么久的**（两头都看不见）：
+
+| 环境 | 表现 |
+|------|------|
+| CI（非 root runner） | 测试真实执行并**失败**，但 `publish.yml` 的 test job 不接 `needs`，失败既不阻塞发布也无人查看 |
+| 本地（root） | 测试因 `euid == 0` 被 `_ROOT_SKIP` **静默跳过**，永远绿 |
+
+修复后普查：i18n 300 个 key 中"定义了但源码从未引用"的死翻译数量 **1 → 0**。
+
+> 顺带说明：i18n 覆盖率检查报 100%，指的是**语言包之间对齐**，它不检查
+> "这个 key 到底有没有被用"。所以死翻译能在 100% 覆盖率的保护下一直藏着。
+
 ## [0.7.17] - 2026-10-07
 
 ### Added: CI 真实安装冒烟关卡（防「装上了跑不起来」复发）
