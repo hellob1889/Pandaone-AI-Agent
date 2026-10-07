@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.hellob1889/pandaone -->
+
 <p align="center">
   <img src="assets/banner-readme.svg" alt="Pandaone AI Agent — AI Agent 代码审计门禁" width="800"/>
 </p>
