@@ -295,6 +295,27 @@ class TestCiNoInit:
         assert rc != 0, "未 init 应 fail"
         assert "未初始化" in out or "未初始化" in err or "REJECTED" in out or "REJECTED" in err
 
+    def test_ci_dir_without_config_is_no_init_not_corrupted(self, tmp_path):
+        """v0.7.16: .pandaone/ 存在但 config.json 缺失 → 报「未初始化」而非「损坏」
+
+        CI 检出里正是这种形态：pandaone.jsonl 曾在 gitignore 生效前被提交，
+        config.json 从未入库。旧实现报 "config.json 损坏 → 请 init --force-reset"，
+        把「从未存在」说成「已损坏」，误导排查方向。
+        """
+        pandaone_dir = tmp_path / ".pandaone"
+        pandaone_dir.mkdir()
+        (pandaone_dir / "pandaone.jsonl").write_text("", encoding="utf-8")
+
+        rc, out, err = _run_cli("ci", "--root", str(tmp_path))
+        combined = out + err
+        assert rc != 0, "缺少 config.json 应 fail"
+        assert "未初始化" in combined or "not initialized" in combined.lower(), (
+            f"应提示未初始化, 实际: {combined[-500:]}"
+        )
+        assert "损坏" not in combined and "corrupted" not in combined.lower(), (
+            f"不应谎报 config.json 损坏, 实际: {combined[-500:]}"
+        )
+
 
 class TestCiGithubActionsYml:
     """GitHub Actions workflow 文件"""

@@ -50,6 +50,15 @@ on:
     # 所以跳过机制放在 step 里通过 [skip-audit] 提交消息控制。
 
 # 取消重复运行
+# v0.7.16 fix（PR #54）：显式声明 GITHUB_TOKEN 权限。
+# 之前"失败时发 PR 评论"那一步报 403 Resource not accessible by integration
+# （x-accepted-github-permissions: issues=write; pull_requests=write），
+# 因为仓库默认工作流令牌权限为只读，未声明 permissions 就拿不到写权限。
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -156,8 +165,15 @@ jobs:
           # 判断：审计强制是**本地门禁**（L3 pre-commit hook + MCP write 审计通道），
           #       它的正确性不依赖 CI 复跑；CI 无法在本地基态缺失时证明任何东西。
           # 处置：基态不可见时显式跳过并说明原因，而不是假装验证后失败。
-          if [ ! -d .pandaone ]; then
-            echo "::notice::检出中无 .pandaone/（被 gitignore）：本地审计基态不可见，跳过 pandaone ci 验证。审计强制由本地 pre-commit hook 与 MCP write 通道执行。"
+          # v0.7.16 二次修正（PR #54）：光判断 .pandaone/ 目录不够。
+          # 事实比想象更脏：.gitignore 里虽然写了 .pandaone/，但 pandaone.jsonl 在
+          # gitignore 生效**之前**就被提交过，git 不会自动取消跟踪 —— 于是 CI 检出里
+          # `.pandaone/` 目录存在（含有历史审计记录），而 config.json 从未入库。
+          # 结果：上一版 `[ ! -d .pandaone ]` 跳过条件永远不触发，`pandaone ci`
+          # 读到缺失的 config.json 直接 exit 1（且报"config.json 损坏"误导排查）。
+          # 处置：以 config.json 是否存在作为"审计基态可用"的判据。
+          if [ ! -d .pandaone ] || [ ! -f .pandaone/config.json ]; then
+            echo "::notice::检出中无可用审计基态（.pandaone/config.json 缺失——该文件被 gitignore，从未入库）：本地审计基态不可见，跳过 pandaone ci 验证。审计强制由本地 pre-commit hook 与 MCP write 通道执行。"
             exit 0
           fi
           # ----- 正常审计流程 -----
