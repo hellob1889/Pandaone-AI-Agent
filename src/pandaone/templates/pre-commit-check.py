@@ -60,8 +60,13 @@ def _resolve_git_exe():
 
 def t_safe(key: str, **kwargs) -> str:
     """
-    安全翻译函数（fallback）。
-    如果 pandaone 未安装，fallback 到内置中文字符串。
+    安全翻译函数。
+
+    正常路径: 调 pandaone.i18n.t() (含 zh-CN + en 双语, 见 i18n.py 的
+    _hook_no_config / _hook_init_hint / ... 等 13 个 key).
+
+    兜底路径: pandaone 未安装 (hook sub-shell PATH 受限时) 用一段极简英文
+    占位, 避免再硬编码中文字符串触发 i18n Hardcoded Chinese Audit.
     """
     try:
         from pandaone.i18n import t as _t
@@ -71,23 +76,27 @@ def t_safe(key: str, **kwargs) -> str:
             i18n.set_lang(i18n_lang)
         return _t(key, **kwargs)
     except ImportError:
-        # Fallback：内置中文（保证 hook 仍然可工作）
-        fallback_zh = {
-            "_hook_no_config": "[Pandaone] 拒绝提交: .pandaone/config.json 不存在",
-            "_hook_init_hint": "请先运行: pandaone init",
-            "_hook_cfg_parse_err": "[Pandaone] config.json 解析失败: {e}",
-            "_hook_git_diff_err": "[Pandaone] git diff 失败: {stderr}",
-            "_hook_git_call_err": "[Pandaone] git 调用失败: {e}",
-            "_hook_no_audit": "[Pandaone] 拒绝提交: 审计日志不存在",
-            "_hook_should_exist": "应存在: {path}",
-            "_hook_audit_read_err": "[Pandaone] 读取审计日志失败: {e}",
-            "_hook_reject_no_audit": "[Pandaone] 拒绝提交: 以下文件没有 APPROVED 审计记录",
-            "_hook_staged_files": "被 staged 的受保护文件:",
-            "_hook_use_pandaone_write": "请使用 pandaone write 命令代替直接 git commit:",
-            "_hook_write_example": '  pandaone write --file <FILE> --reason "..." --problem "..." --approach "..."',
-            "_hook_bypass_hint": "如果确实要绕过审计 (不推荐), 使用: git commit --no-verify",
-        }
-        return fallback_zh.get(key, key).format(**kwargs)
+        # Last-resort fallback: 短英文占位, 真实文案集中在 i18n.py
+        return _FALLBACK_EN.get(key, key).format(**kwargs)
+
+
+# Last-resort English fallback (used only when pandaone.i18n cannot be imported).
+# All real strings live in src/pandaone/i18n.py under _hook_* keys.
+_FALLBACK_EN = {
+    "_hook_no_config": "[Pandaone] Reject commit: .pandaone/config.json not found",
+    "_hook_init_hint": "Please run: pandaone init",
+    "_hook_cfg_parse_err": "[Pandaone] config.json parse error: {e}",
+    "_hook_git_diff_err": "[Pandaone] git diff failed: {stderr}",
+    "_hook_git_call_err": "[Pandaone] git call failed: {e}",
+    "_hook_no_audit": "[Pandaone] Reject commit: audit log not found",
+    "_hook_should_exist": "Expected at: {path}",
+    "_hook_audit_read_err": "[Pandaone] read audit log failed: {e}",
+    "_hook_reject_no_audit": "[Pandaone] Reject commit: the following files have no APPROVED audit record",
+    "_hook_staged_files": "Staged protected files:",
+    "_hook_use_pandaone_write": "Please use pandaone write instead of git commit:",
+    "_hook_write_example": '  pandaone write --file <FILE> --reason "..." --problem "..." --approach "..."',
+    "_hook_bypass_hint": "To bypass audit (not recommended), use: git commit --no-verify",
+}
 
 
 def main():
