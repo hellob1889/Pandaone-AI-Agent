@@ -52,8 +52,14 @@ def install_hook(root: Path) -> int:
     # Bug #22 fix: 强制 LF 换行（bash 在 *nix 上不支持 CRLF）
     # 背景：Windows git checkout 会把 .gitattributes 没声明 LF 的模板转成 CRLF，
     #       shutil.copy 会原样保留，导致 hook 完全失效（L3 防御被绕过）。
+    #
+    # [Fix #49] 同时去除 UTF-8 BOM: PowerShell 5.1 Set-Content -Encoding UTF8
+    # 会写入 BOM (EF BB BF). 如果 hook 模板被带 BOM 写入, Git 看到
+    # `\xef\xbb\xbf#!/bin/sh` 视作非法 shebang, 报 "cannot spawn" 错误.
     content = TEMPLATE.read_bytes()
     content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    if content.startswith(b"\xef\xbb\xbf"):
+        content = content[3:]
     hook_path.write_bytes(content)
 
     # 添加可执行权限（Unix）

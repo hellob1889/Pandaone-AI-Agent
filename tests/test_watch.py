@@ -102,11 +102,14 @@ def test_watch_daemon_writes_pid(tmp_path):
         # 进程应真实存在
         time.sleep(0.5)
         if sys.platform == "win32":
+            # [Fix #50] tasklist 输出 GBK 编码, text=True 用 UTF-8 解码会抛
+            # UnicodeDecodeError 并把 stdout 置为 None. 改用 bytes + 手动 GBK.
             check = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, timeout=5,
             )
-            assert str(pid) in check.stdout, f"watchdog 进程 {pid} 不存在"
+            decoded = check.stdout.decode("gbk", errors="replace") if check.stdout else ""
+            assert str(pid) in decoded, f"watchdog 进程 {pid} 不存在"
 
     finally:
         kill_watchdog(pid_path)

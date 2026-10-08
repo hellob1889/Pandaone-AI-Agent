@@ -4,38 +4,35 @@
 # ============================================================
 # 安装方式: pandaone install-hook
 # 作用: 调用 pre-commit-check.py 拒绝绕过审计的提交
+#
+# [Fix #49] 跨平台 hook 触发兼容
+# --------------------------------------------------------------
+# Git 在不同平台触发 hook 的环境差异:
+#   - Linux/macOS: /bin/sh + 完整 PATH, python3/python 通常在 PATH
+#   - Git for Windows: mingw64 sh + 受限 PATH, 中文系统下 POSIX 路径解析失败
+#
+# 策略: 按可用性顺序探测可执行 python, 找到就 exec 它去调 .pandaone/pre-commit-check.py.
+# python 内部用 _resolve_git_exe() 解决 git 路径 (不依赖 sh).
 # ============================================================
 
-# 找 python
+# 探测 python 可执行: 优先 python3, 再 python, 最后 Windows 上兜底 cmd //c
+PY=""
 if command -v python3 >/dev/null 2>&1; then
-    PY=python3
+    PY="python3"
 elif command -v python >/dev/null 2>&1; then
-    PY=python
-else
-    echo "[Pandaone] 需要 python 但未找到"
-    exit 1
+    PY="python"
 fi
 
-# 找 pre-commit-check.py（与 hook 同目录的 templates/ 下，或 .pandaone/ 下）
-SCRIPT_DIR="$(dirname "$0")"
-CHECK_PY=""
-
-for cand in \
-    "$SCRIPT_DIR/../templates/pre-commit-check.py" \
-    "$SCRIPT_DIR/pre-commit-check.py" \
-    "$(git rev-parse --show-toplevel)/.pandaone/pre-commit-check.py"
-do
-    if [ -f "$cand" ]; then
-        CHECK_PY="$cand"
-        break
-    fi
-done
-
-if [ -z "$CHECK_PY" ]; then
-    echo "[Pandaone] 找不到 pre-commit-check.py"
-    echo "尝试: git rev-parse --show-toplevel/.pandaone/pre-commit-check.py"
-    exit 1
+if [ -n "$PY" ]; then
+    # Linux/macOS/正常 PATH 的 Windows 上直接 exec python
+    exec "$PY" ".pandaone/pre-commit-check.py" "$@"
 fi
 
-# 调用 Python 校验
-exec "$PY" "$CHECK_PY"
+# 兜底: Git for Windows hook sub-shell PATH 受限时, 走 cmd 调 python
+# cmd 能拿到完整 Windows PATH; cmd //c 是 Git for Windows 支持的双斜杠转义
+if command -v cmd >/dev/null 2>&1; then
+    exec cmd //c "set PANDAONE_PRE_COMMIT=1 && python .pandaone/pre-commit-check.py %*"
+fi
+
+echo "[Pandaone] 拒绝执行: 找不到 python 或 cmd"
+exit 1
