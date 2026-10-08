@@ -24,11 +24,12 @@ PANDAX = ROOT / "pandaone_dev.py"
 
 
 def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    # Bug fix (v0.7.15) F-15: 加 errors="replace" 防止 GBK 编码崩溃
     return subprocess.run(
         [sys.executable, str(PANDAX), *args],
         cwd=str(cwd),
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
         timeout=15,
     )
 
@@ -152,7 +153,9 @@ def test_log_empty_when_no_init(tmp_path):
     r = run(["log", "--root", str(tmp_path)], cwd=tmp_path)
     # rc != 0 但不应崩溃
     assert r.returncode != 0, "未 init 的目录应报错"
-    assert "未初始化" in r.stdout or "未找到" in r.stdout or "error" in r.stdout.lower()
+    # Bug fix (v0.7.15) F-15: 错误可能输出到 stderr（而非 stdout）
+    combined = (r.stdout or "") + (r.stderr or "")
+    assert "未初始化" in combined or "未找到" in combined or "error" in combined.lower()
 
 
 if __name__ == "__main__":

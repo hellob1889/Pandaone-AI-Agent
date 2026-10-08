@@ -66,7 +66,7 @@ Your personal manager is on duty 24/7 — **before, during, and after every code
 [![Downloads/month](https://pepy.tech/badge/pandaone-guard/month)](https://pepy.tech/project/pandaone-guard)
 [![Python](https://img.shields.io/pypi/pyversions/pandaone-guard)](https://pypi.org/project/pandaone-guard/)
 [![License](https://img.shields.io/pypi/l/pandaone-guard)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/LICENSE)
-[![Tests](https://img.shields.io/badge/tests-342%20passed-brightgreen)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/audit.yml)
+[![Tests](https://img.shields.io/badge/tests-352%20passed%20%7C%2034%20known%20issues-yellowgreen)](https://github.com/hellob1889/Pandaone-AI-Agent/actions/workflows/audit.yml)
 [![Bugs](https://img.shields.io/badge/bugs-28%20fixed%20(v0.7.1)-success)](https://github.com/hellob1889/Pandaone-AI-Agent/releases/tag/v0.7.1)
 [![i18n](https://img.shields.io/badge/i18n-248%20keys%20zh%2Den%20%E2%89%88%20en-blueviolet)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/src/pandaone/i18n.py)
 [![Lint & i18n CI](https://img.shields.io/badge/Lint%20%26%20i18n-passing-success)](https://github.com/hellob1889/Pandaone-AI-Agent/blob/main/.github/workflows/lint.yml)
@@ -400,7 +400,7 @@ pip install -e .[dev]
 pytest tests/ -v
 ```
 
-当前测试数：**342 passed, 1 skipped**（覆盖 i18n / write / status / lock / ci / watchdog / export / init / e2e / serve / desktop-icon / gitignore）
+当前测试数：**352 passed / 34 failed / 1 skipped**（实测 2026-10-04；详见 [`docs/zh/test-reports/acceptance-v0.7.14.md`](docs/zh/test-reports/acceptance-v0.7.14.md) 看全 34 个失败分类，6 个为全局状态污染导致的偶发失败）
 
 ### 路线图 / Roadmap
 
@@ -418,6 +418,9 @@ pytest tests/ -v
 | **v0.7.1** | ✅ | **28 个 bug 全修 + 4 大新功能**：P0 安全（#8/#12×2/#22/#23）+ P1（#2/#5/#15/#29）+ P2（#21/#6/#20/#9-#10）+ P3（#13/#4/#26/#39）+ UX（#14/#17/#48/#25/#28）+ 工程化（#版本漂移 / #README 分组标签 / #CRLF 根因）+ **🆕 文件夹熊猫锁图标**（desktop.ini + ICO）+ **🆕 Web 实时仪表盘**（watchdog + SSE <100ms）+ **🆕 Git 兼容**（init 自动写 .gitignore）+ **🆕 右键菜单真实可用验证**，298 测试通过 |
 | **v0.7.2** | ✅ | **CI 工程化修复**：publish.yml Tests job 在干净 ubuntu-latest 容器 25s exit 1（setuptools pin 缺失）→ pin `setuptools==80.10.2` + `--no-build-isolation`，新增 pytest log artifact 上传。340 测试通过 |
 | **v0.7.3** | ✅ | **agent 身份 + diff 捕获 + 面板 UI**：`--agent` 参数追踪调用方（Claude / Cursor / Trae / user:name）+ `--verbose` 完整 diff + 彩色面板格式（状态 / 文件 / commit / 行数 / 原因 / 问题 / 方法 / 差异）+ status 加 agent 分组统计 + HTML 导出加卡片布局 + i18n 新增 16 个键。342 测试通过 |
+| **v0.7.14** | ✅ | **MCP 工具 annotations 全量 + README 视觉冲击升级 + PyPI README sync**，已通过 M8ven Trust Index A 级 |
+| **v0.7.14-hotfix1** | ✅ | 右键菜单子项不可见（ExtendedSubCommandsKey 迁移），PR #48 squash merge |
+| **v0.7.15** | 🆕 进行中 | **15 项核心修复**（F-01~F-15）：L3 隐藏文件 bypass + i18n 裸英文 label + V2 winreg + verbose diff + cmd_status L2/L5/UNAUTHORIZED + cli.py __name__ 入口 + watchdog GBK 编码 + ps1 审计链 + handover 文档入库 + README 真实数字 + CHANGELOG 合并 + HANDOVER 数字统一 + 测试自身 bug 三件套 |
 
 完整历史：[CHANGELOG.md](CHANGELOG.md)
 

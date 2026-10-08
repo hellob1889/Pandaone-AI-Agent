@@ -41,9 +41,12 @@ INSTALL_HOOK = ROOT / "src" / "pandaone" / "install_hook.py"
 
 
 def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    # Bug fix (v0.7.15) F-15: 加 errors="replace" + encoding="utf-8" 防止 GBK 崩溃
     return subprocess.run(
         [sys.executable, str(PANDAX), *args],
-        cwd=str(cwd), capture_output=True, text=True, timeout=15,
+        cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        timeout=15,
     )
 
 

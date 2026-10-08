@@ -28,9 +28,13 @@ PANDAX = ROOT / "pandaone_dev.py"
 
 
 def run(args: list[str], cwd: Path, **kw) -> subprocess.CompletedProcess:
+    # Bug fix (v0.7.15) F-07: errors="replace" 防止 watchdog 在 Windows GBK 编码下
+    # 输出非 UTF-8 字节 (0xcf 等) 时 UnicodeDecodeError → check.stdout=None → TypeError
     return subprocess.run(
         [sys.executable, str(PANDAX), *args],
-        cwd=str(cwd), capture_output=True, text=True, timeout=kw.pop("timeout", 15), **kw,
+        cwd=str(cwd), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        timeout=kw.pop("timeout", 15), **kw,
     )
 
 
@@ -86,8 +90,9 @@ def test_watch_daemon_writes_pid(tmp_path):
     try:
         r = subprocess.run(
             [sys.executable, str(PANDAX), "watch", "--root", str(tmp_path), "--daemon"],
-            cwd=str(tmp_path), capture_output=True, text=True, timeout=20,
-            env=env,
+            cwd=str(tmp_path), capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=20, env=env,
         )
         # 应快速返回（rc=0）
         assert r.returncode == 0, f"stderr={r.stderr}"

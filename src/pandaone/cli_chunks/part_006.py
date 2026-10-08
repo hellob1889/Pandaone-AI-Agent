@@ -111,6 +111,11 @@ def _windows_registry_install(action, force=False):
         r"Software\Classes\Directory\shell\Pandaone",
         r"Software\Classes\Directory\Background\shell\Pandaone",
     ]
+    # Bug fix (v0.7.15) F-03: V2 ExtendedSubCommandsKey 模式 (Win10/11 推荐)
+    # 子菜单统一放在此位置（与 BASE_KEYS 分离），主菜单通过 ExtendedSubCommandsKey 引用
+    EXT_SHELL_KEY = r"Software\Classes\Pandaone\Shell"
+    # Init 子菜单的 ECF_SEPARATORBEFORE 标志 (0x20 = 在子项前加分隔线)
+    ECF_SEPARATORBEFORE = 0x20
     SUB_COMMANDS = [
         ("Init",   "初始化 Pandaone (init)", "init"),
         ("Lock",   "锁定文件 (lock)",       "lock"),
@@ -137,6 +142,21 @@ def _windows_registry_install(action, force=False):
                     winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
                 except FileNotFoundError:
                     pass
+            # Bug fix (v0.7.15) F-03: 同时清理 EXT_SHELL_KEY 下的 V2 子菜单
+            for name, _, _ in SUB_COMMANDS:
+                ext_sub_path = f"{EXT_SHELL_KEY}\\{name}"
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, ext_sub_path + "\\command")
+                except FileNotFoundError:
+                    pass
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, ext_sub_path)
+                except FileNotFoundError:
+                    pass
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, EXT_SHELL_KEY)
+            except FileNotFoundError:
+                pass
             print(t("ctx_uninstall_done"))
             print(t("ctx_uninstall_restart_hint"))
             print("  taskkill /f /im explorer.exe && start explorer.exe")
@@ -162,7 +182,7 @@ def _windows_registry_install(action, force=False):
         print(t("ctx_banner_install"))
         print(t("ctx_pandaone_ok", exe=pandaone_exe))
 
-        # 清理旧条目 (幂等)
+        # 清理旧条目 (幂等) — 包括 BASE_KEYS 子菜单 + EXT_SHELL_KEY 分离区
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
@@ -178,26 +198,47 @@ def _windows_registry_install(action, force=False):
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
             except FileNotFoundError:
                 pass
+        # 清理 EXT_SHELL_KEY 下的子菜单
+        for name, _, _ in SUB_COMMANDS:
+            ext_sub_path = f"{EXT_SHELL_KEY}\\{name}"
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, ext_sub_path + "\\command")
+            except FileNotFoundError:
+                pass
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, ext_sub_path)
+            except FileNotFoundError:
+                pass
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, EXT_SHELL_KEY)
+        except FileNotFoundError:
+            pass
         print(t("ctx_step1"))
 
         icon_value = f'"{pandaone_exe}",0'
+        # Bug fix (v0.7.15) F-03: V2 ExtendedSubCommandsKey 模式
+        # 主菜单：(Default)="" + MUIVerb + Icon + ExtendedSubCommandsKey 指向 EXT_SHELL_KEY
+        # 子菜单：放在 EXT_SHELL_KEY 下 (分离位置, 避免 explorer cache 混乱)
+        # Init 子项 CommandFlags=0x20 (ECF_SEPARATORBEFORE) 在 Win10/11 modern menu 中加分隔线
         for base in BASE_KEYS:
-            # 主菜单 (cascade = submenu)
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
-                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "")
                 winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
-                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
-            # 4 个 subcommands
-            for name, label, action_cmd in SUB_COMMANDS:
-                sub_path = f"{base}\\shell\\{name}"
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
-                    winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
-                    winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
-                cmd_path = f"{sub_path}\\command"
-                cmd_value = f'"{pandaone_exe}" --silent --trust-default {action_cmd} --root "%V"'
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
-                    winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
+                winreg.SetValueEx(key, "ExtendedSubCommandsKey", 0, winreg.REG_SZ, EXT_SHELL_KEY)
+        # 子菜单全部放在 EXT_SHELL_KEY 下
+        for name, label, action_cmd in SUB_COMMANDS:
+            ext_sub_path = f"{EXT_SHELL_KEY}\\{name}"
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, ext_sub_path) as sub_key:
+                winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
+                winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
+                # Init 子项加 CommandFlags=0x20 (Win10/11 子项前分隔线)
+                if name == "Init":
+                    winreg.SetValueEx(sub_key, "CommandFlags", 0, winreg.REG_DWORD, ECF_SEPARATORBEFORE)
+            cmd_path = f"{ext_sub_path}\\command"
+            cmd_value = f'"{pandaone_exe}" --silent --trust-default {action_cmd} --root "%V"'
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
+                winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
         print(t("ctx_step2"))
         print(t("ctx_step3"))
 

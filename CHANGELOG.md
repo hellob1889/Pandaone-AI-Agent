@@ -2,174 +2,44 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
-## [0.7.18] - 2026-10-07
-
-### Changed: 完整测试套件前移到 PR 阶段（测试不再是个装饰品）
-
-**发现**：核对 CI 实际配置时，`lint.yml` 的注释写着
-
-> 完整测试（3 OS × 3 Python = 9 矩阵）在 publish.yml 跑，gate 发布。
-
-这句话里有**两个事实错误**：
-
-1. `publish.yml` 里从来没有 9 矩阵 —— 只有一个 ubuntu + Python 3.10 单跑一次；
-2. 更关键的是，`publish` job 的 `needs` 写的是 `[build]`，**不包含 `test`**
-   —— 也就是说 pytest 挂了照样把包推上 PyPI。
-
-于是"完整测试"在结构上一直是装饰品，两头都不 gate：
-
-| 阶段 | 跑什么 | 实际 gate 了什么 |
-|------|--------|------------------|
-| PR（`lint.yml` Smoke Tests） | 3 个测试文件的冒烟 | 只拦住这 3 个文件被改坏 |
-| 发版（`publish.yml` test job） | 全量 377 个测试 | **什么都不拦**（不接 `needs`） |
-
-后果：改坏 `tests/` 下其余 40 个文件里任何一个的 PR 都能顺利合进 main，
-直到发版那一刻才（可能）被发现 —— 而那时发布流程已经拦不住了。
-
-**这是与 v0.7.16、v0.7.17 同一病根的第三次复发**：验证手段与真实场景脱节，
-且从来没有人断言过"这个检查到底 gate 了什么"。前两次分别是
-`.pandaone/` 半存在（跳过条件永远不触发）与 editable 冒烟绕开打包路径。
-
-**处置**：
-
-1. `lint.yml` 的 Smoke Tests job（规则集**必需**状态检查）新增一步
-   **完整测试套件** —— 改坏任何一个测试的 PR 在合并前就被拦住。
-   本地实测：editable 安装 / Python 3.11 下 `364 passed, 13 skipped`，约 73 秒
-   （job timeout 相应从 5 分钟放宽到 15 分钟）。
-2. `publish.yml` 的 `publish` job 改为 `needs: [build, test]`，
-   让发版前的那次全量运行真正能拦住"带着失败测试发版"。
-
-**排除项说明**（有据，不是迷信）：`tests/test_watchdog.py` 与
-`tests/test_watchdog_dedupe.py` 使用线程 + 时序断言，在共享 runner 上会偶发挂住
-（源自 commit `541d50c`「exclude hang-prone watchdog/serve tests」），继续排除，
-仍由本地全量回归覆盖（本地跑含这两个文件是 377P/13S/0F）。
-同时清掉 `--ignore=tests/test_pandaone_serve.py` —— 该文件早已改名为
-`test_pandax_serve.py`，这条参数近年来一直指向一个不存在的文件。
-
-### Fixed: `pandaone log --rejected` 补上「当时想写什么」（死翻译接线）
-
-新关卡第一次运行就抓到的真 bug —— 也正是"完整测试前移"这件事价值的直接证据。
-
-`tests/test_e2e.py::test_full_workflow_e2e` 断言 `log --rejected` 的输出里
-要有 `attempted` / `尝试` 字段，在 CI 上一直是**失败**的。原因是：
-
-- 审计记录在写入被拒时**确实保存**了 `attempted_reason` / `attempted_problem` /
-  `attempted_approach`（`part_003` 的 REJECTED 分支）；
-- 翻译 key `log_attempted` 也**确实定义**在 i18n 双语包里；
-- 但 `_print_log` **从来没有调用过它** —— 这是一条**死翻译**。
-
-后果对审计产品是实质缺陷：被拒绝的写入只留一句"为什么拒绝"，不留"当时想写什么"。
-审计留痕最关键的那一半丢了 —— 事后复盘能看到"这次被拦了"，却看不到"被拦的是什么"。
-
-**它是怎么藏这么久的**（两头都看不见）：
-
-| 环境 | 表现 |
-|------|------|
-| CI（非 root runner） | 测试真实执行并**失败**，但 `publish.yml` 的 test job 不接 `needs`，失败既不阻塞发布也无人查看 |
-| 本地（root） | 测试因 `euid == 0` 被 `_ROOT_SKIP` **静默跳过**，永远绿 |
-
-修复后普查：i18n 300 个 key 中"定义了但源码从未引用"的死翻译数量 **1 → 0**。
-
-> 顺带说明：i18n 覆盖率检查报 100%，指的是**语言包之间对齐**，它不检查
-> "这个 key 到底有没有被用"。所以死翻译能在 100% 覆盖率的保护下一直藏着。
-
-## [0.7.17] - 2026-10-07
-
-### Added: CI 真实安装冒烟关卡（防「装上了跑不起来」复发）
-
-**动机**：v0.7.14 的致命缺陷是用户 `pip install` 之后 CLI 跑不起来。复盘发现 CI 里
-唯一的冒烟用的是 **editable 安装**（`pip install -e .`）——它直接从源码目录 import，
-**绕开整个 wheel 打包路径**，因此 package-data 漏配、入口点写错、子包没打进 wheel
-这几类问题在结构上永远不可能被 editable 冒烟发现。CI 全程绿，用户第一分钟就崩。
-
-**处置**：在 `lint.yml` 的 Smoke Tests job（仓库规则集的必需状态检查）里补一步
-**非 editable 真实安装**：
-
-```
-python -m venv … && pip install .   # 真正走 wheel
-pandaone --help                      # CLI 可执行
-command -v pandaone-mcp              # MCP 入口点在
-已装版本 == pyproject 声明版本        # 版本漂移
-```
-
-这一步复现的就是真实用户的第一分钟，且因为挂在必需检查上，**装坏了就合不进 main**。
-
-### Changed: `pandax-guard` 弃用声明
-
-PyPI 上的旧包名 **`pandax-guard` 已弃用**（停在 0.7.4，不再更新也不再修 bug）。
-README 中英文双语顶部均加入醒目提示，并给出迁移命令：
-
-```bash
-pip uninstall pandax-guard && pip install pandaone-guard
-```
-
-避免新用户搜到旧包装上，得到一份 2026-09 的、带已知缺陷的实现。
-
-## [0.7.16] - 2026-10-07
-
-### Fixed: unlock 不再把受保护文件变成 world-writable（安全缺陷）
-
-**问题**：`unlock` 用 `mode | S_IWUSR | S_IWGRP | S_IWOTH` 解除只读，把 444 解成 **666** —— 门禁自己给同机任意用户开了写后门。而 `lock` 会清除全部三种写位，原始权限就此丢失，解锁时无从还原。
-
-**修复**（`src/pandaone/cli_chunks/part_003.py`）：
-
-| 场景 | 行为 |
-|------|------|
-| lock | 上锁前把每个文件的原始 mode 记入 `.pandaone/lock_modes.json` |
-| unlock（有记录） | 精确还原锁定前的 mode（644 → lock 444 → unlock 644） |
-| unlock（无记录，旧版 lock / 手工 chmod） | 只恢复属主写位，绝不补 group/other（默认 644） |
-| write 通道临时解锁 | 由 `\|USER\|GROUP\|OTHER` 收窄为只加 `S_IWUSR`，缩短 world-writable 暴露窗口 |
-
-`.pandaone/lock_modes.json` 随 unlock 完成后清理，避免陈旧记录影响后续轮次。
-
-新增两条回归测试：精确还原 644、无记录退化为属主可写。
-
 ## [0.7.15] - 2026-10-04
 
-### 主题：AI Agent 真实体验修复 —「装上就能用，接上就干净」
+### Security / 阻断级（必须升级）
+- **F-01 L3 隐藏文件旁路修复**：`templates/pre-commit-check.py:95` 用 `_is_protected_path()` 4 规则函数替代 `Path(f).suffix in protected_exts`，修复 `.env` / `.gitignore` / `.htaccess` / `Dockerfile` / `Makefile` 等空后缀文件绕过审计门禁的 Bug #22。同时启用 `exclude_patterns` 字段（之前定义未用）
 
-**背景**：GitHub 下载量 22 次 / 0 star / main CI 红。逐条复盘真实使用链路（pip install → MCP 接入 → 日常调用）后，发现的问题不在宣传的功能列表里，而在**第一次真实调用**上。本版本全部围绕「让 MCP 客户端和脚本拿到的输出干净、让 CLI 直调不失效」。
+### Bug Fix（重要）
+- **F-02 A1 i18n 裸英文 label**：`part_004.py:116-124` 的 `print(f"file: ...")` / `reason:` / `problem:` / `approach:` / `rejection:` 改为走 `t()` 本地化（`log_field_file/commit/reason/problem/approach/rejection` 6 个新 key）
+- **F-03 V2 winreg 实现**：`part_006.py` `_windows_registry_install` 从 V1 SubCommands 模式迁移到 V2 ExtendedSubCommandsKey 模式（Win10/11 推荐）；主菜单 `(Default)=""` + `MUIVerb` + `Icon` + `ExtendedSubCommandsKey="Software\Classes\Pandaone\Shell"`；子菜单统一搬到 EXT_SHELL_KEY 下分离位置；Init 子项 `CommandFlags=0x20` (ECF_SEPARATORBEFORE) 加 Win10/11 modern menu 分隔线
+- **F-04 A2 verbose 死变量替换**：`part_004.py:_render_unified_diff()` 新函数，`--verbose` 时显示 difflib.unified_diff 真实完整 diff + 行数统计（v0.7.3 声称的 `--verbose` 完整 diff 此前是纸面功能）
+- **F-05 cmd_status 三段补齐**：审计统计段加 APPROVED/REJECTED/UNAUTHORIZED 三分类计数；UNAUTHORIZED > 0 时打印警告（最近 3 条文件路径）
+- **F-06 cli.py 入口修复**：loader 第 27 行 `_exec_ns["__name__"]="pandaone.cli"` 后，底部 `if __name__=="__main__":` 块重置 `__name__="__main__"` 让 `python cli.py` 直接调用也工作（之前静默 no-op）
+- **F-07 watchdog GBK 编码防护**：`tests/test_watch.py` `subprocess.run` 加 `encoding="utf-8"` + `errors="replace"`，防止 watchdog 在 Windows GBK 编码下输出非 UTF-8 字节（0xcf 等）时 UnicodeDecodeError → check.stdout=None → TypeError
 
-### Fixed: CLI 直接运行静默 no-op（致命）
+### Governance / 治理
+- **F-08 ps1 审计链补齐**：工作树 V1-revert 的 `install_context_menu.ps1` 手动追加 `audit_hotfix2_v0715_001` APPROVED 记录到 `.pandaone/pandaone.jsonl`（补齐审计链 — 选项 A "采纳 hotfix2"）
 
-`cli.py` 是 loader，通过 `exec()` 把 `cli_chunks/part_001-006.py` 编译进同一命名空间，但 exec 时把 `__name__` 覆写为 `"pandaone.cli"`，导致 `python cli.py` 的 `if __name__ == "__main__"` 永假——**直接运行 CLI 什么都不发生，exit code 0**。保存 `_is_main` 标记修复。这是比任何功能缺陷都严重的一类 bug：用户装完第一次敲命令就哑火。
+### Documentation / 文档
+- **F-09 4 文档入库**：`docs/HANDOVER.md` / `docs/HANDOVER_CHECKLIST.md` / `接手复盘_HANDOVER审查.md` / `测试验收结论_v0.7.14_实跑验证.md` 全部 `git add` 入库（之前仅 HANDOVER.md 已暂存）
+- **F-10 README 真实数字**：徽章与第 365 行从 "342 passed" → "352 passed / 34 failed / 1 skipped"，roadmap 加 v0.7.14-hotfix1 与 v0.7.15 行
+- **F-12 HANDOVER 数字统一**：§4.3 与 §12 改用真实数字，移除过期 "342 passed"
 
-### Fixed: MCP 输出三重噪音（ANSI 转义 + banner + roadmap）
+### Test Quality / 测试自身修复
+- **F-13 `test_readme_loaded.py` ×2**：与 banner isatty 抑制冲突已在 part_006.py 用 `sys.stdout.isatty()` 解决；调整断言期望即可
+- **F-14 `test_audit_i18n_ci.py` ×6**：排除中文注释（注释行以 `#` 开头且不含引号不算硬编码）
+- **F-15 install_git/log/phase2_e2e 测试自身 bug**：`test_install_git.py` 用 monkeypatch 移除 git；`test_log.py` 检查 stderr 与 stdout；`test_phase2_e2e.py` 修断言变量（检查 watchdog 回调 capture 而非 status 仪表盘输出）
 
-MCP server 通过 subprocess 调 CLI 再回传 stdout，此前把 40+ 行彩色 banner、README 摘要、roadmap 一起塞给 MCP 客户端，污染模型上下文。修复：
+### Migration Notes / 升级注意
+- v0.7.14-hotfix1 用户**必须升级**：Win11 22H2+ 子项不可见已修
+- v0.7.15 L3 隐藏文件旁路修复**必须升级**：`.env` 等敏感文件未走审计的风险消除
+- v0.7.15 V2 winreg 模式**需要重启 explorer（资源管理器）**才能看到菜单变化
 
-- `_run_cli` 统一加 `--silent`，并用 `_strip_ansi()` 剥离 ANSI 转义序列
-- CLI 的 banner / README 摘要改为**仅 TTY 输出**（`sys.stdout.isatty()` 门控）——人类在终端仍能看到完整 banner，管道和 MCP 拿到的只有结果
-
-### Added: write 审计通道支持新建文件
-
-此前 `write` 对不存在的文件直接 REJECTED（"目标文件不存在"），Agent 无法通过审计通道创建任何新文件。现在：提供 `--content` + 受保护扩展名即可创建，父目录自动补建，审计记录标注 `"action": "create"`。
-
-### Fixed: 只读检测在 root 下失效
-
-`os.access(path, os.W_OK)` 对 root 恒返回 True，导致 L1 锁（444 文件）对 root 不设防。改为直接检查权限位 `st_mode & S_IWUSR`。（注：OS 层面 root 物理上不受权限位约束，本修复保证 CLI 审计层行为一致；相关测试在 root 环境标记 skip。）
-
-### Improved: log / status 输出补全
-
-- `log` 打印此前为死代码的记录头（ID / 时间 / agent），字段标签本地化，新增 `Lines: +N -M` 与 Diff 面板（verbose 不截断）
-- `status` 补 L2 watchdog 区块（`os.kill(pid, 0)` 探活）与未 init 提示；计数标签本地化
-- `log` / `export` 未 init 时给出明确提示而非空输出
-
-### Fixed: MCP server 版本漂移
-
-`pandaone_mcp` 硬编码 `__version__ = "0.7.7"`，与实际包版本（0.7.14+）脱节 7 个版本。改为动态解析 `pandaone.__version__`，`serverInfo` 同步。
-
-### Fixed: 测试套件可移植性（CI 红的直接原因）
-
-- 5 个测试文件硬编码作者机器路径（`D:\软件\Git\cmd\git.exe`）→ `shutil.which("git")` 动态探测
-- 2 个静态分析测试读 `cli.py`（loader）而非 `cli_chunks/` → 修正读取方式
-- `test_audit_i18n_ci.py` 的 `fresh_cli` fixture 从 `git show HEAD` 恢复文件，会**静默回滚开发者未提交的修改**（本次开发中实际吃掉过一次修复）→ 改为备份工作区状态
-- install-git 测试的输出长度阈值按英文硬编码（>50），i18n 中文输出（38 字符）必挂 → 对齐为 >20
-- 权限类测试在 root 环境标记 skip（环境限制，非产品缺陷）
-
-### Fixed: 安装包缺文件
-
-`pyproject.toml` 补 `[tool.setuptools.package-data]`：`installer/windows/*.ps1`、`installer/macos/*.sh`、`installer/linux/*.sh` 随包分发，修复安装后右键菜单脚本缺失。
+### New 方案C 全阶段（hotfix1 之前）
+- L5 自指纹 `PANDAX_FP_PATH` env 覆盖 + conftest 指纹备份/恢复 fixture（消除多测试间全局指纹污染 6 个 flake）
+- `package-data` 声明补全（ICO/installer 进 wheel）
+- `cmd_status` L2 watchdog 段补修
+- banner 仅在 TTY 输出（Unix 惯例）
+- `part_004`：`--verbose` 统一 diff + i18n 标签接入 `t()`
+- hotfix2：右键菜单安装脚本 V2 ExtendedSubCommandsKey → V1 SubCommands（与 winreg 一致）
 
 ## [0.7.14-hotfix1] - 2026-09-21
 

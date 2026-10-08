@@ -17,11 +17,56 @@ Phase 10: i18n — 所有 print 走 t()，由 pandaone.i18n 提供。
   - 对每个 staged 受保护文件查审计日志的 APPROVED 记录
   - 缺记录就 exit 1（拒绝 commit）
 """
+import fnmatch
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _is_protected_path(path_str: str, protected_exts: list, exclude_patterns: list = None) -> bool:
+    """判断 staged 文件是否需要审计记录（受保护）。
+
+    规则优先级（从高到低）：
+      1. exclude_patterns 匹配 → 不保护（允许绕过审计）
+      2. 文件名以 '.' 开头（隐藏文件） → 强制保护（无视扩展名）
+      3. 后缀名匹配 protected_exts → 保护
+      4. 其他 → 不保护
+
+    Args:
+        path_str: 相对路径字符串（已用 / 归一化）
+        protected_exts: 受保护扩展名列表，如 [".py", ".json"]
+        exclude_patterns: 排除模式列表（fnmatch glob），如 ["_tmp_*.py", "*.pyc"]
+
+    Returns:
+        True if 文件需要审计记录（拒绝直接 commit）；False if 文件可放行
+
+    Bug 修复背景：
+      - Bug #22: pre-commit-check.py:95 用 Path(f).suffix 过滤，.env / .gitignore 等
+        隐藏文件 suffix 为空 → 绕过审计门禁（v0.7.14 发现，v0.7.15 修）
+      - Bug #22+: exclude_patterns 字段在 config.json 定义但未应用（v0.7.14 发现，v0.7.15 修）
+    """
+    p = Path(path_str)
+
+    # Rule 1: exclude_patterns 优先（允许临时文件 / 编译产物绕过）
+    if exclude_patterns:
+        for pattern in exclude_patterns:
+            # 兼容 glob（fnmatch）与全名（exact）
+            if fnmatch.fnmatch(p.name, pattern) or p.name == pattern:
+                return False
+
+    # Rule 2: 隐藏文件强制保护（无论扩展名）
+    # .env / .gitignore / .pandaone/* 等通常含敏感配置，必须审计
+    if p.name.startswith('.'):
+        return True
+
+    # Rule 3: 扩展名匹配
+    if p.suffix in protected_exts:
+        return True
+
+    # Rule 4: 默认不保护
+    return False
 
 
 def t_safe(key: str, **kwargs) -> str:
@@ -91,8 +136,12 @@ def main():
         print(t_safe("_hook_git_call_err", e=e), file=sys.stderr)
         sys.exit(1)
 
-    # 3. 过滤出受保护扩展名
-    protected_staged = [f for f in staged if Path(f).suffix in protected_exts]
+    # 3. 过滤出受保护路径（修复 Bug #22 隐藏文件绕过 + Bug #22+ exclude_patterns 未应用）
+    exclude_patterns = cfg.get("exclude_patterns", [])
+    protected_staged = [
+        f for f in staged
+        if _is_protected_path(f, protected_exts, exclude_patterns)
+    ]
 
     if not protected_staged:
         # 没有受保护文件被 staged, 放行

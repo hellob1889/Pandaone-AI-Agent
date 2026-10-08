@@ -112,6 +112,7 @@ TRANSLATIONS = {
         "status_count_approved": "  - 已批准: {n}",
         "status_count_rejected": "  - 已拒绝: {n}",
         "status_count_unauthorized": "  - 未授权 (UNAUTHORIZED): {n}",
+        "status_unauthorized_warn": "  [WARN] 检测到 {n} 条非授权写入（最近: {recent_files}）",
 
         # Bug #14 fix: log 输出中硬编码的 id=/file= 标签本地化
         "log_record_header": "[{ts}] {status}  {id_label}={rid}  {file_label}={file_}",
@@ -232,6 +233,7 @@ TRANSLATIONS = {
         "log_action_rejected": "拒绝",
         "log_action_unauthorized": "非授权",
         "log_field_commit": "commit",
+        "log_field_rejection": "拒绝原因",
         "log_attempted": "  尝试: reason={reason}, problem={problem}, approach={approach}",
         "log_unauth_detection": "  检测: {detection}",
         "log_unauth_action": "  操作: {action}",
@@ -477,6 +479,8 @@ TRANSLATIONS = {
         "status_count_approved": "  - Approved: {n}",
         "status_count_rejected": "  - Rejected: {n}",
         "status_count_unauthorized": "  - Unauthorized: {n}",
+        "status_unauthorized_warn": "  [WARN] Detected {n} unauthorized writes (recent: {recent_files})",
+        "status_count_unauthorized": "  - Unauthorized: {n}",
 
         # Bug #14 fix: log 输出中硬编码的 id=/file= 标签本地化
         "log_record_header": "[{ts}] {status}  {id_label}={rid}  {file_label}={file_}",
@@ -594,6 +598,7 @@ TRANSLATIONS = {
         "log_action_unauthorized": "unauthorized",
         "log_field_id": "ID",
         "log_field_commit": "commit",
+        "log_field_rejection": "rejection",
         "log_attempted": "  Attempted: reason={reason}, problem={problem}, approach={approach}",
         "log_unauth_detection": "  Detection: {detection}",
         "log_unauth_action": "  Action: {action}",

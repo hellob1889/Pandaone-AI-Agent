@@ -91,6 +91,14 @@ def is_in_skip_context(line: str) -> bool:
     # 注释行
     if stripped.startswith("#"):
         return True
+    # Bug fix (v0.7.15) F-14: 行内注释 - 中文出现在 # 之后
+    # 例: print(x)  # 中文注释不应被计为硬编码
+    # 简化判断: 找到第一个不在字符串内的 # 位置, 如果第一个中文字符在该位置之后, 算注释
+    comment_pos = _find_inline_comment_pos(line)
+    if comment_pos is not None:
+        first_chinese = CHINESE_RE.search(line)
+        if first_chinese and first_chinese.start() > comment_pos:
+            return True
     # 已迁移的 t() / t_bilingual() / t_safe() / i18n.t() 调用（用 word-boundary）
     if _T_CALL_RE.search(line):
         return True
@@ -108,6 +116,28 @@ def is_in_skip_context(line: str) -> bool:
         return True
     # f-string 中只含占位符（不是中文）
     return False
+
+
+def _find_inline_comment_pos(line: str):
+    '''找到行内 # 注释的起始位置（不在字符串内）。返回 None 表示无注释。
+
+    简化版字符串状态机: 跟踪是否在双引号或单引号内, 跳过井号出现在字符串内的情况。
+    不处理三引号字符串 (假定三引号行已被外层 docstring 跟踪跳过)。
+    '''
+    in_str = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if in_str:
+            if ch == in_str and (i == 0 or line[i - 1] != "\\"):
+                in_str = None
+        else:
+            if ch == '"' or ch == "'":
+                in_str = ch
+            elif ch == "#":
+                return i
+        i += 1
+    return None
 
 
 def audit_file(path: Path) -> list:

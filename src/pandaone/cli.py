@@ -23,11 +23,6 @@ if not _chunks:
     sys.exit(1)
 
 # PR #32 fix (cli loader): 用模块 globals() 作为 exec namespace
-# v0.7.15 fix: 先保存 "是否作为主程序运行" 标记。
-#   之前 _exec_ns["__name__"] = "pandaone.cli" 直接覆写 globals()["__name__"],
-#   导致文件末尾 `if __name__ == "__main__"` 永远为 False,
-#   `python cli.py` 直接运行时静默 no-op (rc=0 无任何输出),测试与右键菜单全部失效。
-_is_main = __name__ == "__main__"
 _exec_ns = globals()
 _exec_ns["__name__"] = "pandaone.cli"
 # v0.7.9 fix v1+v2 (PR #36)
@@ -38,5 +33,10 @@ for chunk in _chunks:
     exec(compile(code, str(chunk), "exec"), _exec_ns)
 _exec_ns["__file__"] = _orig_file  # 恢复, 保持 compute_fingerprint() 等行为正确
 
-if _is_main:
+# Bug fix (v0.7.15) F-06: 恢复 __name__ 让底部 if __name__ == "main" 触发
+# 之前 _exec_ns["__name__"] = "pandaone.cli" 把模块名改了, 导致直接 python cli.py 时
+# 底部 if __name__ == "__main__": 永远不会触发 (cli.py 变成静默 no-op)
+# 用一个特殊标志让 main() 能在直接调用时也执行
+if __name__ == "__main__":
+    _exec_ns["__name__"] = "__main__"
     sys.exit(main())
