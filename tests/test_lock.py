@@ -20,6 +20,14 @@ from pathlib import Path
 
 import pytest
 
+# [Fix #51] Windows 文件权限模型不支持 Unix-style group/other 权限位.
+# 以下两个测试在 POSIX 上验证 0o644 → 0o444 → unlock 还原的行为,
+# Windows 上 chmod 调用不报错但实际位不可预测, 跳过以避免误报.
+_skip_lock_mode_on_win32 = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Unix file mode bits not reliable on Windows; covered by Linux CI",
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 PANDAX = ROOT / "pandaone_dev.py"
 
@@ -65,6 +73,7 @@ def test_lock_makes_files_readonly(tmp_path):
             f.write("# should fail\n")
 
 
+@_skip_lock_mode_on_win32
 def test_unlock_restores_original_mode_not_world_writable(tmp_path):
     """v0.7.16: unlock 应还原锁定前的 mode，绝不留下 world-writable（666）
 
@@ -87,6 +96,7 @@ def test_unlock_restores_original_mode_not_world_writable(tmp_path):
     assert mode == 0o644, f"应精确还原为 644，实际 {oct(mode)}"
 
 
+@_skip_lock_mode_on_win32
 def test_unlock_without_mode_record_is_owner_write_only(tmp_path):
     """无 mode 记录时（旧版 lock / 手工 chmod 444）解锁也应只给属主写权限"""
     import stat

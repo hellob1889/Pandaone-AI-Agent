@@ -19,9 +19,43 @@ Phase 10: i18n — 所有 print 走 t()，由 pandaone.i18n 提供。
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _resolve_git_exe():
+    """
+    Resolve `git` executable absolute path.
+
+    Git for Windows hook sub-shell PATH is nearly empty, so the bare
+    command name "git" may not be found. Walk common install locations
+    + PATH lookup + GIT_EXECUTABLE env hint. Used by pre-commit-check.py
+    to avoid `FileNotFoundError` even when hook PATH is broken.
+    """
+    candidates = []
+    env_hint = os.environ.get("GIT_EXECUTABLE")
+    if env_hint:
+        candidates.append(env_hint)
+    which = shutil.which("git")
+    if which:
+        candidates.append(which)
+    # Common Windows install locations
+    for d in (
+        r"C:\Program Files\Git\cmd\git.exe",
+        r"C:\Program Files\Git\mingw64\bin\git.exe",
+        r"C:\Program Files (x86)\Git\cmd\git.exe",
+        r"C:\Program Files (x86)\Git\mingw64\bin\git.exe",
+        r"D:\软件\Git\cmd\git.exe",
+        r"D:\软件\Git\mingw64\bin\git.exe",
+    ):
+        if os.path.exists(d):
+            candidates.append(d)
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    return "git"  # 最后兜底：留给 PATH 正常的环境（Linux/macOS）
 
 
 def t_safe(key: str, **kwargs) -> str:
@@ -80,7 +114,7 @@ def main():
     # 2. 读取 git staged 文件
     try:
         r = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=AM"],
+            [_resolve_git_exe(), "diff", "--cached", "--name-only", "--diff-filter=AM"],
             cwd=str(repo_root), capture_output=True, text=True, timeout=10,
         )
         if r.returncode != 0:
