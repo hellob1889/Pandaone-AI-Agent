@@ -399,6 +399,23 @@ TRANSLATIONS = {
         # ============ macOS workflow 弹窗文本 ============
         "macos_choose_prompt": "选择要执行的操作 (Choose action) — 目标 (Target): {path}",
         "macos_no_selection": "没有选中任何文件或文件夹 (No file or folder selected)",
+
+        # ============ pre-commit-check.py 校验提示（fallback hook 使用） ============
+        # 这些 key 在 hook sub-shell 里通过 t_safe() 调用, 集中放这里便于
+        # i18n Hardcoded Chinese Audit 一次扫干净.
+        "_hook_no_config": "[Pandaone] 拒绝提交: .pandaone/config.json 不存在",
+        "_hook_init_hint": "请先运行: pandaone init",
+        "_hook_cfg_parse_err": "[Pandaone] config.json 解析失败: {e}",
+        "_hook_git_diff_err": "[Pandaone] git diff 失败: {stderr}",
+        "_hook_git_call_err": "[Pandaone] git 调用失败: {e}",
+        "_hook_no_audit": "[Pandaone] 拒绝提交: 审计日志不存在",
+        "_hook_should_exist": "应存在: {path}",
+        "_hook_audit_read_err": "[Pandaone] 读取审计日志失败: {e}",
+        "_hook_reject_no_audit": "[Pandaone] 拒绝提交: 以下文件没有 APPROVED 审计记录",
+        "_hook_staged_files": "被 staged 的受保护文件:",
+        "_hook_use_pandaone_write": "请使用 pandaone write 命令代替直接 git commit:",
+        "_hook_write_example": '  pandaone write --file <FILE> --reason "..." --problem "..." --approach "..."',
+        "_hook_bypass_hint": "如果确实要绕过审计 (不推荐), 使用: git commit --no-verify",
     },
 
     "en": {
@@ -760,6 +777,22 @@ TRANSLATIONS = {
         # ============ macOS workflow dialog text ============
         "macos_choose_prompt": "选择要执行的操作 (Choose action) — 目标 (Target): {path}",
         "macos_no_selection": "没有选中任何文件或文件夹 (No file or folder selected)",
+
+        # ============ pre-commit-check.py validation messages (fallback hook) ============
+        # Mirror the zh-CN set so t() can switch languages inside the hook.
+        "_hook_no_config": "[Pandaone] Reject commit: .pandaone/config.json not found",
+        "_hook_init_hint": "Please run first: pandaone init",
+        "_hook_cfg_parse_err": "[Pandaone] config.json parse error: {e}",
+        "_hook_git_diff_err": "[Pandaone] git diff failed: {stderr}",
+        "_hook_git_call_err": "[Pandaone] git call failed: {e}",
+        "_hook_no_audit": "[Pandaone] Reject commit: audit log not found",
+        "_hook_should_exist": "Expected at: {path}",
+        "_hook_audit_read_err": "[Pandaone] read audit log failed: {e}",
+        "_hook_reject_no_audit": "[Pandaone] Reject commit: the following files have no APPROVED audit record",
+        "_hook_staged_files": "Staged protected files:",
+        "_hook_use_pandaone_write": "Please use pandaone write instead of direct git commit:",
+        "_hook_write_example": '  pandaone write --file <FILE> --reason "..." --problem "..." --approach "..."',
+        "_hook_bypass_hint": "If you must bypass audit (not recommended), use: git commit --no-verify",
     },
 }
 
