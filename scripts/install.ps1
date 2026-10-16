@@ -100,7 +100,7 @@ function Test-PythonVersion {
             if ($versionOutput -match "Python (\d+)\.(\d+)\.(\d+)") {
                 $major = [int]$Matches[1]
                 $minor = [int]$Matches[2]
-                if ($major -ge $MIN_PYTHON_MAJOR -and $minor -ge $MIN_PYTHON_MINOR) {
+                if ($major -gt $MIN_PYTHON_MAJOR -or ($major -eq $MIN_PYTHON_MAJOR -and $minor -ge $MIN_PYTHON_MINOR)) {
                     Write-OK "$versionOutput (>=$MIN_PYTHON_MAJOR.$MIN_PYTHON_MINOR)"
                     return $cmd
                 } else {
