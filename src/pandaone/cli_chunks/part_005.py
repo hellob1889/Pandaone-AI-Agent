@@ -72,7 +72,7 @@ def _download_portable_git():
     zip_path = target / "git.zip"
     print(t("git_downloading", url=url))
     try:
-        urllib.request.urlretrieve(url, zip_path)
+        urllib.request.urlretrieve(url, zip_path, timeout=30)  # v0.7.19 fix: 加 timeout 避免下载挂死
     except Exception as e:
         print(t("git_download_failed", err=e))
         return 1
