@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from .i18n import t
+from . import __version__
 
 # ============================================================
 # 通用工具
