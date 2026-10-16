@@ -57,12 +57,10 @@ def _check_layer5_self_fingerprint() -> dict:
 
 def _check_layer6_tamper_detection() -> dict:
     """v0.7.19: 真查 .pandaone/pandaone.jsonl audit log 状态 (替代 L6 字面量 'OK')"""
-    try:
-        from pandaone.cli import ROOT
-    except ImportError as e:
-        return {"ok": False, "note": f"pandaone.cli import failed: {e}"}
-    # ROOT = src/pandaone/, .pandaone/ 实际在 repo root
-    audit_log = ROOT.parent.parent / '.pandaone' / 'pandaone.jsonl'
+    # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
+    # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
+    repo_root = _Path(__file__).resolve().parent.parent.parent
+    audit_log = repo_root / '.pandaone' / 'pandaone.jsonl'
     if not audit_log.exists():
         return {"ok": True, "note": "no audit log yet (clean state)"}
     try:
