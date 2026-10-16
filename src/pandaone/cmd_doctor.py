@@ -145,7 +145,7 @@ def _collect_report():
             "ok": git_section["installed"],
             "note": "OK" if git_section["installed"] else "DISABLED - requires git",
         },
-        "L4_startup_check": {"ok": True, "note": "OK"},
+        "L4_startup_check": _check_layer4_startup(),
         "L5_self_fingerprint": {"ok": True, "note": "OK"},
         "L6_tamper_detection": {"ok": True, "note": "OK"},
         "L7_ci_audit": {"ok": True, "note": "OK (audit.yml in workflow)"},
