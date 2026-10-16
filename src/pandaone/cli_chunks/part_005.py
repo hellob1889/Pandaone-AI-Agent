@@ -115,9 +115,9 @@ def cmd_watch(args):
             watchdog_exe = exe_dir / "pandaone_guard.exe"
             if not watchdog_exe.exists():
                 return 1
-            cmd = [str(watchdog_exe), "--root", str(root)]
+            cmd = [str(watchdog_exe), "--root", str(root), "--daemon"]
         else:
-            cmd = [sys.executable, "-m", "pandaone_guard", "--root", str(root)]
+            cmd = [sys.executable, "-m", "pandaone_guard", "--root", str(root), "--daemon"]
         p = subprocess.Popen(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"}, **kwargs)
         pid_path = pandaone_dir / ".watchdog_pid"
         for _ in range(20):
