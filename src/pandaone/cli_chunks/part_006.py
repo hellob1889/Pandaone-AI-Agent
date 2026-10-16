@@ -296,7 +296,10 @@ def main(argv=None):
     if lang_override is not None:
         args.lang = lang_override
     i18n_init(args.lang)
-    if "--update-fingerprint" in argv_list:
+    # v0.7.19 fix: --version / --help 跳过 fingerprint check (meta command 不需要)
+    _meta_cmds = ("--version", "-V", "--help", "-h")
+    _is_meta = any(a in _meta_cmds for a in argv_list)
+    if "--update-fingerprint" in argv_list or _is_meta:
         pass
     elif getattr(args, "trust_default", False):
         if not check_fingerprint(silent=True):
