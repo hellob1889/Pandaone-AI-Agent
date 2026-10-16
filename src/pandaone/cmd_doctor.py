@@ -24,6 +24,16 @@ import shutil as _shutil
 import sys as _sys
 
 
+def _check_layer4_startup() -> dict:
+    """v0.7.19: 真查 watchdog 是否可 import (替代 L4 字面量 'OK')"""
+    try:
+        import watchdog  # noqa: F401
+        return {"ok": True, "note": "watchdog importable"}
+    except ImportError:
+        return {"ok": False, "note": "watchdog NOT installed (L4 disabled)"}
+
+
+
 def add_doctor_parser(sub_parsers_action):
     """把 doctor subparser 注册到给定的 subparsers action 上。"""
     doctor_p = sub_parsers_action.add_parser(
