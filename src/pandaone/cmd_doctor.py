@@ -33,6 +33,62 @@ def _check_layer4_startup() -> dict:
         return {"ok": False, "note": "watchdog NOT installed (L4 disabled)"}
 
 
+def _check_layer5_self_fingerprint() -> dict:
+    """v0.7.19: 真算 pandaone.py SHA256 vs 存储 fingerprint (替代 L5 字面量 'OK')"""
+    try:
+        from pandaone.cli import compute_fingerprint, FP_PATH
+    except ImportError as e:
+        return {"ok": False, "note": f"pandaone.cli import failed: {e}"}
+    try:
+        current = compute_fingerprint()
+    except Exception as e:
+        return {"ok": False, "note": f"compute fingerprint failed: {e}"}
+    if not FP_PATH.exists():
+        return {"ok": True, "note": "no stored fingerprint (first run)"}
+    try:
+        stored = FP_PATH.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        return {"ok": False, "note": f"read fingerprint failed: {e}"}
+    if stored == current:
+        return {"ok": True, "note": "matches stored fingerprint"}
+    return {"ok": False, "note": "TAMPERED (stored != current SHA256)"}
+
+
+def _check_layer6_tamper_detection() -> dict:
+    """v0.7.19: 真查 .pandaone/pandaone.jsonl audit log 状态 (替代 L6 字面量 'OK')"""
+    audit_log = _Path.home() / ".pandaone" / "pandaone.jsonl"
+    if not audit_log.exists():
+        return {"ok": True, "note": "no audit log yet (clean state)"}
+    try:
+        text = audit_log.read_text(encoding="utf-8")
+        approved = text.count('"APPROVED"')
+        rejected = text.count('"REJECTED"')
+        return {
+            "ok": True,
+            "note": f"audit log: {approved} APPROVED + {rejected} REJECTED",
+        }
+    except Exception as e:
+        return {"ok": False, "note": f"audit read failed: {e}"}
+
+
+def _check_layer7_ci_audit() -> dict:
+    """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)"""
+    try:
+        from pandaone.cli import ROOT
+    except ImportError as e:
+        return {"ok": False, "note": f"pandaone.cli import failed: {e}"}
+    workflow = ROOT / ".github" / "workflows" / "audit.yml"
+    if not workflow.exists():
+        return {"ok": False, "note": f"{workflow} NOT found"}
+    try:
+        text = workflow.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"ok": False, "note": f"read failed: {e}"}
+    if "pull_request" in text or "pull-request" in text:
+        return {"ok": True, "note": "audit.yml with pull_request trigger OK"}
+    return {"ok": False, "note": "audit.yml missing pull_request trigger"}
+
+
 
 def add_doctor_parser(sub_parsers_action):
     """把 doctor subparser 注册到给定的 subparsers action 上。"""
