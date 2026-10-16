@@ -77,12 +77,10 @@ def _check_layer6_tamper_detection() -> dict:
 
 def _check_layer7_ci_audit() -> dict:
     """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)"""
-    try:
-        from pandaone.cli import ROOT
-    except ImportError as e:
-        return {"ok": False, "note": f"pandaone.cli import failed: {e}"}
-    # ROOT = src/pandaone/, .github/ 在 repo root
-    workflow = ROOT.parent.parent / '.github' / 'workflows' / 'audit.yml'
+    # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
+    # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
+    repo_root = _Path(__file__).resolve().parent.parent.parent
+    workflow = repo_root / '.github' / 'workflows' / 'audit.yml'
     if not workflow.exists():
         return {"ok": False, "note": f"{workflow} NOT found"}
     try:
