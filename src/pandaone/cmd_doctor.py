@@ -203,7 +203,7 @@ def _collect_report():
         },
         "L4_startup_check": _check_layer4_startup(),
         "L5_self_fingerprint": _check_layer5_self_fingerprint(),
-        "L6_tamper_detection": {"ok": True, "note": "OK"},
+        "L6_tamper_detection": _check_layer6_tamper_detection(),
         "L7_ci_audit": {"ok": True, "note": "OK (audit.yml in workflow)"},
     }
 
