@@ -186,6 +186,9 @@ def _pid_alive(pid_text: str) -> bool:
         return False
     if pid <= 0:
         return False
+    if pid > 2**31 - 1:
+        # psutil.pid_exists 内部转 C long, 超大 PID 抛 OverflowError
+        return False
     try:
         import psutil
         return psutil.pid_exists(pid)
