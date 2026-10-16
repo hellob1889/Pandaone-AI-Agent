@@ -57,7 +57,8 @@ def _check_layer5_self_fingerprint() -> dict:
 
 def _check_layer6_tamper_detection() -> dict:
     """v0.7.19: 真查 .pandaone/pandaone.jsonl audit log 状态 (替代 L6 字面量 'OK')"""
-    audit_log = _Path.home() / ".pandaone" / "pandaone.jsonl"
+    # v0.7.19 fix: ROOT = src/pandaone/, .pandaone/ 实际在 repo root
+    audit_log = ROOT.parent.parent / ".pandaone" / "pandaone.jsonl"
     if not audit_log.exists():
         return {"ok": True, "note": "no audit log yet (clean state)"}
     try:
