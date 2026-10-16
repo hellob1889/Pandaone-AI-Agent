@@ -79,7 +79,8 @@ def _check_layer7_ci_audit() -> dict:
         from pandaone.cli import ROOT
     except ImportError as e:
         return {"ok": False, "note": f"pandaone.cli import failed: {e}"}
-    workflow = ROOT / ".github" / "workflows" / "audit.yml"
+    # v0.7.19 fix: ROOT = src/pandaone/, .github/ 在 repo root
+    workflow = ROOT.parent.parent / ".github" / "workflows" / "audit.yml"
     if not workflow.exists():
         return {"ok": False, "note": f"{workflow} NOT found"}
     try:
