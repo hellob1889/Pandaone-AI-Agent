@@ -303,6 +303,14 @@ def main(argv=None):
             new_fp = compute_fingerprint()
             FP_PATH.parent.mkdir(parents=True, exist_ok=True)
             FP_PATH.write_text(new_fp, encoding="utf-8")
+            # v0.7.19 fix: trust_default 走 audit log 留痕, 避免静默改写指纹
+            try:
+                _audit_log = FP_PATH.parent / "pandaone.jsonl"
+                _audit_log.parent.mkdir(parents=True, exist_ok=True)
+                with _audit_log.open("a", encoding="utf-8") as _f:
+                    _f.write("{\"event\": \"trust_default_fingerprint_update\", \"new\": \"" + new_fp + "\"}\n")
+            except Exception:
+                pass  # audit 写失败不影响主流程
     else:
         if not check_fingerprint():
             return 1
