@@ -8,11 +8,50 @@
 #
 # 或装特定版本:
 #   $env:PANDAONE_TARGET_VERSION="0.7.20"; irm ... | iex
+#
+# 或指定 python (PATH 里有 venv python 但想用 system python):
+#   $env:PANDAONE_PYTHON="C:\Users\you\AppData\Local\Programs\Python\Python311\python.exe"; irm ... | iex
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 $GITHUB_REPO = "hellob1889/Pandaone-AI-Agent"
 $TARGET_VERSION = $env:PANDAONE_TARGET_VERSION  # 可选, 默认取最新
+
+# --- 0. 解析 python 解释器 ---
+# 优先: $env:PANDAONE_PYTHON → py.exe -3.11 (Windows launcher) → 系统 python (跳 venv) → PATH python
+function Resolve-Python {
+    if ($env:PANDAONE_PYTHON -and (Test-Path $env:PANDAONE_PYTHON)) {
+        return $env:PANDAONE_PYTHON
+    }
+    # Windows Python launcher
+    $py = (Get-Command py.exe -ErrorAction SilentlyContinue)
+    if ($py) {
+        try {
+            $ver = & py.exe -3.11 -c "import sys; print(sys.executable)" 2>$null
+            if ($ver -and (Test-Path $ver)) {
+                return $ver.Trim()
+            }
+        } catch {}
+    }
+    # 系统 python (跳 venv/Scripts/python.exe)
+    $candidates = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "C:\Python311\python.exe",
+        "C:\Python312\python.exe"
+    )
+    foreach ($c in $candidates) {
+        if (Test-Path $c) { return $c }
+    }
+    # Fallback: PATH 第一个 python.exe
+    $first = (Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($first) { return $first.Path }
+    throw "找不到 python.exe, 请设置 `$env:PANDAONE_PYTHON 显式指向"
+}
+
+$PYTHON = Resolve-Python
+Write-Host "[*] Using python: $PYTHON" -ForegroundColor DarkGray
 
 # --- 1. 查最新 version ---
 if (-not $TARGET_VERSION) {
@@ -34,15 +73,12 @@ $WHEEL_PATH = Join-Path $env:TEMP "pandaone_guard-$TARGET_VERSION-py3-none-any.w
 
 # --- 3. 卸老版 ---
 Write-Host "[2/6] Uninstall old pandaone-guard..." -ForegroundColor Cyan
-try {
-    python -m pip uninstall pandaone-guard -y 2>&1 | Out-Null
-    Write-Host "      OK" -ForegroundColor Green
-} catch {
-    Write-Host "      [WARN] uninstall error: $_" -ForegroundColor Yellow
-}
+$out = cmd /c "`"$PYTHON`" -m pip uninstall pandaone-guard -y 2>nul"
+Write-Host "      OK" -ForegroundColor Green
 
 # --- 4. 下 wheel ---
 Write-Host "[3/6] Downloading $WHEEL_URL ..." -ForegroundColor Cyan
+$ProgressPreference = "SilentlyContinue"
 try {
     Invoke-WebRequest -Uri $WHEEL_URL -OutFile $WHEEL_PATH -UseBasicParsing
     $size = (Get-Item $WHEEL_PATH).Length
@@ -54,36 +90,32 @@ try {
 
 # --- 5. 装新 wheel ---
 Write-Host "[4/6] Installing pandaone-guard==$TARGET_VERSION ..." -ForegroundColor Cyan
-try {
-    python -m pip install --upgrade $WHEEL_PATH 2>&1 | Select-Object -Last 5
-    Write-Host "      OK" -ForegroundColor Green
-} catch {
-    Write-Host "[FAIL] Install error: $_" -ForegroundColor Red
+$out = cmd /c "`"$PYTHON`" -m pip install --upgrade --force-reinstall `"$WHEEL_PATH`" 2>&1"
+$out | Select-Object -Last 8
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[FAIL] pip install exit=$LASTEXITCODE" -ForegroundColor Red
     exit 1
 }
+Write-Host "      OK" -ForegroundColor Green
 
 # --- 6. update-fingerprint (P0-2 改算法必跑) ---
 Write-Host "[5/6] Updating fingerprint (P0-2 改算法, 必跑)..." -ForegroundColor Cyan
-try {
-    pandaone --update-fingerprint 0000
+$out = cmd /c "`"$PYTHON`" -m pandaone --update-fingerprint 0000 2>&1"
+$out | Select-Object -Last 5
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[FAIL] update-fingerprint exit=$LASTEXITCODE" -ForegroundColor Red
+    Write-Host "      手动跑: `"$PYTHON`" -m pandaone --update-fingerprint 0000" -ForegroundColor Yellow
+} else {
     Write-Host "      OK" -ForegroundColor Green
-} catch {
-    Write-Host "[FAIL] update-fingerprint error: $_" -ForegroundColor Red
-    Write-Host "      手动跑: pandaone --update-fingerprint 0000" -ForegroundColor Yellow
 }
 
 # --- 7. 验 ---
 Write-Host "[6/6] Verifying installation..." -ForegroundColor Cyan
-try {
-    $ver = pandaone --version
-    Write-Host "      $ver" -ForegroundColor Green
-} catch {
-    Write-Host "[FAIL] verification error: $_" -ForegroundColor Red
-    exit 1
-}
+$ver = cmd /c "`"$PYTHON`" -m pandaone --version 2>&1"
+Write-Host "      $ver" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host "Pandaone $TARGET_VERSION 安装完成" -ForegroundColor Green
-Write-Host "下一步 (可选): 装右键菜单 → pandaone install-context" -ForegroundColor Yellow
+Write-Host "下一步 (可选): 装右键菜单 → $PYTHON -m pandaone install-context" -ForegroundColor Yellow
 Write-Host "================================================" -ForegroundColor Cyan
