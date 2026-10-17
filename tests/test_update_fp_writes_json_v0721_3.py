@@ -1,4 +1,13 @@
-"""Refactored v0.7.21.3 test — subprocess 模式触发真 cli loader, 不依赖 module-level shared globals."""
+"""Refactored v0.7.21.3 test — subprocess 模式触发真 cli loader, 不依赖 module-level shared globals.
+
+CI portability fix (v0.7.21.3 hotfix hotfix):
+  - 老 commit #6 用 Windows-absolute 路径 (C:\\...\\python.exe, D:\\绿联云办公\\...)
+    在 Linux CI runner 上 FileNotFoundError. 改 portable:
+    (a) subprocess 用 sys.executable (CI runner 自己 Python interpreter).
+    (b) 静态 source check 用 __file__ 相对路径 (tests/test_foo.py -> ../../src/pandaone/cli_chunks/part_006.py),
+        不依赖 absolute Windows path.
+  - Path.home() 重定向 USERPROFILE/HOME/HOMEDRIVE/HOMEPATH 兼容 Windows + Linux.
+"""
 import json
 import os
 import subprocess
@@ -7,14 +16,22 @@ from pathlib import Path
 
 import pytest
 
-PYTHON = r"C:\Users\Administrator\AppData\Local\Programs\Python\Python311\python.exe"
+# v0.7.21.3 hotfix hotfix: portable subprocess Python interpreter
+# (老 commit 用 C:\\...\\Python311\\python.exe 死路径, CI Linux runner 跑失败).
+PYTHON = sys.executable
+# v0.7.21.3 hotfix hotfix: portable source path
+# tests/test_*.py 在 repo root 下 tests/, 目标 src/pandaone/cli_chunks/part_006.py 上推两级.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_PART_006 = _REPO_ROOT / "src" / "pandaone" / "cli_chunks" / "part_006.py"
 
 
 def test_v0721_3_update_fingerprint_writes_json_format(tmp_path):
     """v0.7.21.3: `pandaone --update-fingerprint 0000` 后 FP_PATH 是合法 json {version, hash, stored_at}."""
     fp_path = tmp_path / ".pandaone_fp.txt"
     env = os.environ.copy()
-    # Path.home() Windows 优先 USERPROFILE, fallback HOMEDRIVE+HOMEPATH, fallback HOME
+    # Path.home() 重定向到 tmp_path:
+    # - Windows: USERPROFILE 优先, fallback HOMEDRIVE+HOMEPATH
+    # - Linux/macOS: HOME
     env["USERPROFILE"] = str(tmp_path)
     env["HOME"] = str(tmp_path)
     env["HOMEDRIVE"] = ""
@@ -94,8 +111,11 @@ def test_v0721_3_trust_default_writes_json_format(tmp_path):
 
 def test_v0721_3_no_bare_hex_in_part_006():
     """v0.7.21.3: part_006.py 源码不应再出现 `write_text(new_fp` 裸 hex 写入."""
-    src = Path(r"D:\绿联云办公\项目 水龙头项目 CodeAudit_项目文档\src\pandaone\cli_chunks\part_006.py")
-    text = src.read_text(encoding="utf-8")
+    assert _PART_006.exists(), (
+        f"v0.7.21.3 hotfix: _PART_006 not found at {_PART_006}. "
+        f"__file__={__file__}, _REPO_ROOT={_REPO_ROOT}"
+    )
+    text = _PART_006.read_text(encoding="utf-8")
     # v0.7.21.3 fix: 应改 _save_fp 走 json 格式, 不应再 raw write_text(new_fp
     assert "write_text(new_fp" not in text, (
         "v0.7.21.3: part_006.py 含 'write_text(new_fp' 残留 — "
