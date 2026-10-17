@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 # v0.7.19 hotfix: 改用 module 引用, 让 mock.patch("pandaone.cmd_doctor._collect_report") work
 # (旧 from-import 是值引用, mock patch module attr 不影响 test 用的引用)
-from pandaone import cmd_doctor as _cmd_doc_mod
+from pandaone import cmd_doctor as _cmd_doc_mod  # v0.7.19 hotfix 2: mock.patch.object uses this
 cmd_doctor = _cmd_doc_mod.cmd_doctor
 add_doctor_parser = _cmd_doc_mod.add_doctor_parser
 _collect_report = _cmd_doc_mod._collect_report
@@ -105,7 +105,7 @@ def _ok_report():
 
 class TestCmdDoctorJSON:
     def test_json_output(self, capsys):
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=_ok_report()):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=_ok_report()):
             exit_code = cmd_doctor(_make_args(json_out=True))
             captured = capsys.readouterr()
         out = captured.out
@@ -126,7 +126,7 @@ class TestCmdDoctorJSON:
             assert k in report
 
     def test_exit_code_zero_when_all_ok(self):
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=_ok_report()):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=_ok_report()):
             assert cmd_doctor(_make_args(json_out=True)) == 0
 
     def test_exit_code_one_when_git_missing(self):
@@ -135,7 +135,7 @@ class TestCmdDoctorJSON:
         report["git"]["version"] = None
         report["git"]["path"] = None
         report["overall_ok"] = False
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=report):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=report):
             assert cmd_doctor(_make_args(json_out=True)) == 1
 
     def test_exit_code_two_when_python_too_old(self):
@@ -143,26 +143,27 @@ class TestCmdDoctorJSON:
         report["python"]["too_old"] = True
         report["python"]["ok"] = False
         report["overall_ok"] = False
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=report):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=report):
             assert cmd_doctor(_make_args(json_out=True)) == 2
 
 
 class TestCmdDoctorInstallGit:
     def test_install_git_already_installed(self, capsys):
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=_ok_report()):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=_ok_report()):
             exit_code = cmd_doctor(_make_args(install_git=True, json_out=True))
             captured = capsys.readouterr()
         assert "install_git" not in captured.out
         assert exit_code == 0
 
     def test_install_git_failure(self, capsys):
+        from pandaone import git_installer as _gi_mod
         from pandaone.git_installer import GitInstallError
         report = _ok_report()
         report["git"]["installed"] = False
         report["git"]["version"] = None
         report["overall_ok"] = False
-        with mock.patch("pandaone.cmd_doctor._collect_report", return_value=report), \
-             mock.patch("pandaone.git_installer.install",
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=report), \
+             mock.patch.object(_gi_mod, "install",
                         side_effect=GitInstallError("test install failure")):
             exit_code = cmd_doctor(_make_args(install_git=True, json_out=True))
             captured = capsys.readouterr()
