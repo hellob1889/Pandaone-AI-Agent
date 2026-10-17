@@ -52,9 +52,15 @@ class TestBug48TrustDefaultPositionIndependent:
             self.fp_path.unlink()
 
     def _set_wrong_fp(self):
-        """写入错误的 fingerprint 模拟 mismatch"""
+        """写入错误的 fingerprint 模拟 mismatch.
+
+        v0.7.21.2 起:
+          - 旧 hex "0"*64 → 走 legacy migrate (auto-refresh, 不报错) → 不能触发 mismatch 测
+          - 非 hex 字符 "f"*63 + "g" → 解析失败, 视为损坏 → 走 ERROR 路径
+        """
         self.fp_path.parent.mkdir(parents=True, exist_ok=True)
-        self.fp_path.write_text("0" * 64, encoding="utf-8")
+        # 用非 hex 字符 (末位 'g' 不是 hex) 模拟真篡改
+        self.fp_path.write_text("f" * 63 + "g", encoding="utf-8")
 
     def test_trust_default_after_subcommand_updates_fp(self, tmp_path):
         """--trust-default 在子命令后也能生效（修复后）"""
