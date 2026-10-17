@@ -67,7 +67,7 @@ def test_fingerprint_matches_pandaone_py():
         FP_PATH.unlink()
     run([])
     stored = FP_PATH.read_text(encoding="utf-8").strip()
-    expected = compute_sha256(PANDAX)
+    expected = compute_fingerprint()
     assert stored == expected, f"指纹不匹配:\n  存储: {stored}\n  期望: {expected}"
 
 
