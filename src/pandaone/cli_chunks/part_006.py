@@ -192,8 +192,10 @@ def _windows_registry_install(action, force=False):
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
                     winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
                     winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
-                cmd_path = f"{sub_path}\\command"
-                cmd_value = f'"{pandaone_exe}" --silent --trust-default {action_cmd} --root "%V"'
+                # v0.7.20 P0-1 fix: Explorer 只认 \open\command 路径
+                # v0.7.20 P0-3 fix: 去掉 --trust-default, 避免右键菜单静默关 L5 自校验
+                cmd_path = f"{sub_path}\\open\\command"
+                cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
                     winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
         print(t("ctx_step2"))
