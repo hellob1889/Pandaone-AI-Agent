@@ -92,17 +92,18 @@ def _find_pandaone_exe_windows():
 
 def _windows_registry_install(action, force=False):
     """
-    v0.7.9 fix (PR #35): Windows 直接用 Python winreg 写注册表,
-    完全 bypass PowerShell. 修复 5 个累积 bug (BOM / #Requires / [CmdletBinding()]
-    函数体内 $ErrorActionPreference / PowerShell 7+ 表达式 if 语法 / 注释内 () 干扰 parser).
-    注册表结构与原 PS1 等价:
-      HKCU\\Software\\Classes\\*\\shell\\Pandaone (任意文件右键)
+    v0.7.9 fix (PR #35): Windows uses Python winreg directly to write registry,
+    completely bypassing PowerShell. Fixes 5 accumulated bugs (BOM / #Requires /
+    [CmdletBinding()] / $ErrorActionPreference inside function body / PowerShell 7+
+    expression-if syntax / parentheses in comments confusing parser).
+    Registry structure equivalent to the original PS1:
+      HKCU\\Software\\Classes\\*\\shell\\Pandaone (right-click on any file)
           \\shell\\Init\\shell\\open\\command  → pandaone init --root "%V"
           \\shell\\Lock\\shell\\open\\command  → pandaone lock --root "%V"
           \\shell\\Status\\shell\\open\\command → pandaone status --root "%V"
           \\shell\\Unlock\\shell\\open\\command → pandaone unlock --root "%V"
-      HKCU\\Software\\Classes\\Directory\\shell\\Pandaone (目录右键)
-      HKCU\\Software\\Classes\\Directory\\Background\\shell\\Pandaone (空白处右键)
+      HKCU\\Software\\Classes\\Directory\\shell\\Pandaone (right-click on directory)
+      HKCU\\Software\\Classes\\Directory\\Background\\shell\\Pandaone (right-click on background)
     """
     import winreg
 
@@ -112,10 +113,10 @@ def _windows_registry_install(action, force=False):
         r"Software\Classes\Directory\Background\shell\Pandaone",
     ]
     SUB_COMMANDS = [
-        ("Init",   "初始化 Pandaone (init)", "init"),
-        ("Lock",   "锁定文件 (lock)",       "lock"),
-        ("Status", "查看状态 (status)",     "status"),
-        ("Unlock", "解锁文件 (unlock)",     "unlock"),
+        ("Init",   "Pandaone Init (init)",   "init"),
+        ("Lock",   "Pandaone Lock (lock)",   "lock"),
+        ("Status", "Pandaone Status (status)", "status"),
+        ("Unlock", "Pandaone Unlock (unlock)", "unlock"),
     ]
 
     try:
@@ -210,10 +211,10 @@ def _windows_registry_install(action, force=False):
                     _v, _ = winreg.QueryValueEx(_k, "")
                     winreg.CloseKey(_k)
                 except FileNotFoundError:
-                    print(f"  [ERROR] verb 不可解析: {verb_path}", file=sys.stderr)
+                    print(t("ctx_self_check_verb_err", verb_path=verb_path), file=sys.stderr)
                     self_check_ok = False
         if not self_check_ok:
-            print("[FAIL] 装后自检失败, 右键菜单不会显示, 请重试", file=sys.stderr)
+            print(t("ctx_self_check_fail"), file=sys.stderr)
             return 1
         print(t("ctx_step3"))
 
