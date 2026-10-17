@@ -118,8 +118,14 @@ def test_update_fingerprint_with_default_password():
     assert r.returncode == 0, f"更新失败: stderr={r.stderr}"
 
     # 指纹应被重写
+    import json as _json2
     assert FP_PATH.exists()
-    assert compute_fingerprint() == FP_PATH.read_text(encoding="utf-8").strip()
+    stored_raw2 = FP_PATH.read_text(encoding="utf-8").strip()
+    try:
+        stored2 = _json2.loads(stored_raw2)["hash"]
+    except (ValueError, KeyError):
+        stored2 = stored_raw2
+    assert compute_fingerprint() == stored2
 
 
 def test_update_fingerprint_with_wrong_password():
