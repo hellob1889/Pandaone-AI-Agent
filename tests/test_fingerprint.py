@@ -66,7 +66,14 @@ def test_fingerprint_matches_pandaone_py():
     if FP_PATH.exists():
         FP_PATH.unlink()
     run([])
-    stored = FP_PATH.read_text(encoding="utf-8").strip()
+    import json as _json
+    stored_raw = FP_PATH.read_text(encoding="utf-8").strip()
+    # v0.7.21.2: FP_PATH 是 json {version, hash, stored_at}, 取 hash 字段比对
+    try:
+        stored = _json.loads(stored_raw)["hash"]
+    except (ValueError, KeyError):
+        # 兼容旧裸 hex 格式
+        stored = stored_raw
     expected = compute_fingerprint()
     assert stored == expected, f"指纹不匹配:\n  存储: {stored}\n  期望: {expected}"
 
