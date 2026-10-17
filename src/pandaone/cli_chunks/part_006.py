@@ -164,14 +164,12 @@ def _windows_registry_install(action, force=False):
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
-                try:
-                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path + "\\command")
-                except FileNotFoundError:
-                    pass
-                try:
-                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path)
-                except FileNotFoundError:
-                    pass
+                # v0.7.20 P0-1 fix: 删 open\command 而不只是 command
+                for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                    try:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                    except FileNotFoundError:
+                        pass
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
             except FileNotFoundError:
