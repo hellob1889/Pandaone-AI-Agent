@@ -42,6 +42,10 @@ def compute_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def compute_fingerprint() -> str:
+    pass
+
+
 def test_fingerprint_file_exists_after_run():
     """运行 CLI 后 .pandaone_fp.txt 应被创建"""
     if FP_PATH.exists():
