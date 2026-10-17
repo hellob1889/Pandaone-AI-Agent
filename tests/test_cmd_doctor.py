@@ -12,9 +12,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from pandaone.cmd_doctor import (
-    cmd_doctor, add_doctor_parser, _collect_report, _print_human_report,
-)
+# v0.7.19 hotfix: 改用 module 引用, 让 mock.patch("pandaone.cmd_doctor._collect_report") work
+# (旧 from-import 是值引用, mock patch module attr 不影响 test 用的引用)
+from pandaone import cmd_doctor as _cmd_doc_mod
+cmd_doctor = _cmd_doc_mod.cmd_doctor
+add_doctor_parser = _cmd_doc_mod.add_doctor_parser
+_collect_report = _cmd_doc_mod._collect_report
+_print_human_report = _cmd_doc_mod._print_human_report
 
 
 class TestAddDoctorParser:
