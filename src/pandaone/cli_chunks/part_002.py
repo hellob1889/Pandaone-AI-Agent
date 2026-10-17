@@ -62,32 +62,129 @@ def compute_fingerprint() -> str:
     return h.hexdigest()
 
 
-def check_fingerprint(silent: bool = False) -> bool:
+def _get_pandaone_version() -> str:
+    """v0.7.21.2: 取 pandaone 当前安装版本（指纹绑定用）."""
+    try:
+        import importlib.metadata as _imd
+        return _imd.version("pandaone-guard")
+    except Exception:
+        return "0.0.0+unknown"
+
+
+def _now_iso() -> str:
+    """v0.7.21.2: ISO 8601 UTC 时间戳."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _save_fp(version: str, hash_hex: str) -> None:
+    """v0.7.21.2: 存指纹到 FP_PATH (json 格式)."""
+    import json as _json
+    data = {
+        "version": version,
+        "hash": hash_hex,
+        "stored_at": _now_iso(),
+    }
+    FP_PATH.write_text(
+        _json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_fp():
+    """v0.7.21.2: 读 FP_PATH, 兼容旧裸 hex + 新 json 两种格式.
+
+    Returns:
+        (version, hash, migrated: bool)
+        migrated=True 表示从旧裸 hex 迁移到新 json
     """
-    检查 pandaone.py 指纹。
-    返回 True = 通过（首次运行也通过，会生成初始指纹）
-    返回 False = 失败（被篡改）
+    import json as _json
+    raw = FP_PATH.read_text(encoding="utf-8").strip()
+    # 尝试 json 解析
+    try:
+        data = _json.loads(raw)
+        if isinstance(data, dict) and "version" in data and "hash" in data:
+            return data["version"], data["hash"], False
+    except (ValueError, _json.JSONDecodeError):
+        pass
+    # 旧格式: 裸 hex 64 字符, 走迁移流程
+    if len(raw) == 64 and all(c in "0123456789abcdef" for c in raw.lower()):
+        return "0.0.0+legacy", raw, True
+    raise ValueError(f"FP file corrupted: {raw[:80]!r}")
+
+
+def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
+    """
+    v0.7.21.2: 检查 pandaone.py 指纹, 支持版本号感知 + default auto-refresh.
+
+    行为:
+      - 首次运行: 生成 json 格式 {version, hash, stored_at}
+      - hash match: 100% 通过 (True)
+      - hash mismatch:
+          - version 也变: 默认 auto-refresh (True) + info log
+          - version 相同: 真篡改 → ERROR (False)
+      - strict=True: 任何 hash mismatch 都报 ERROR (锁传统)
+      - 旧裸 hex 格式: 自动迁移到 json, 触发一次 info log
+
+    Returns:
+        True = 通过 (auto-refresh 成功 / hash match / 首次生成)
+        False = 失败 (strict 模式 hash mismatch / 同版本 hash 变)
     silent=True → 不打印任何错误（用于 --trust-default 模式）
     """
     current = compute_fingerprint()
+    current_version = _get_pandaone_version()
 
     if not FP_PATH.exists():
-        # 首次运行：生成初始指纹
-        FP_PATH.write_text(current, encoding="utf-8")
+        # 首次运行：生成初始指纹 (json 格式)
+        _save_fp(current_version, current)
         if not silent:
             print(t("info_fp_generated", fp=current[:16]))
         return True
 
-    stored = FP_PATH.read_text(encoding="utf-8").strip()
-    if stored != current:
+    try:
+        stored_version, stored_hash, migrated = _load_fp()
+    except ValueError as e:
         if not silent:
             print(t("err_fingerprint_mismatch"))
-            print(f"  {t('_stored', stored=stored[:16])}")
+            print(f"  {e}")
+            print(f"  {t('err_fingerprint_hint')}")
+        return False
+
+    # 旧格式迁移 (裸 hex → json)
+    if migrated:
+        _save_fp(current_version, current)
+        if not silent:
+            print(t("info_fp_migrated"))
+            print(f"  {t('info_fp_generated', fp=current[:16])}")
+        return True
+
+    # hash 匹配
+    if stored_hash == current:
+        return True
+
+    # hash 不匹配
+    if strict:
+        if not silent:
+            print(t("err_fp_strict_mismatch", old_hash=stored_hash[:16], new_hash=current[:16]))
+            print(f"  {t('_stored', stored=stored_hash[:16])}")
             print(f"  {t('_current', current=current[:16])}")
             print(f"  {t('err_fingerprint_hint')}")
         return False
 
-    return True
+    # 默认模式: 版本号变了 → auto-refresh
+    if stored_version != current_version:
+        _save_fp(current_version, current)
+        if not silent:
+            print(t("info_fp_auto_refreshed", old_version=stored_version, new_version=current_version, hash=current[:16]))
+        return True
+
+    # 同版本号 + hash 变 = 真篡改
+    if not silent:
+        print(t("err_fingerprint_mismatch"))
+        print(f"  {t('_stored', stored=stored_hash[:16])}")
+        print(f"  {t('_current', current=current[:16])}")
+        print(f"  {t('err_fingerprint_hint')}")
+    return False
 
 
 def cmd_init(args):
