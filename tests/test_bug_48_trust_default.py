@@ -84,18 +84,23 @@ class TestBug48TrustDefaultPositionIndependent:
         new_fp = self.fp_path.read_text(encoding="utf-8").strip()
         assert new_fp != "0" * 64
 
-    def test_without_trust_default_still_fails(self, tmp_path):
-        """不带 --trust-default 时仍应报错（安全：避免静默改 fingerprint）"""
+    def test_strict_mode_rejects_mismatch(self, tmp_path):
+        """v0.7.21.2: --strict 模式下 fingerprint 不匹配应报错且不被自动更新 (锁传统行为).
+
+        Bug #48 老 test 期望"无 --trust-default 时 fingerprint 保持 0*64 不变".
+        v0.7.21.2 默认 auto-refresh 改了这行为 (这就是痛点修复本身).
+        改用 --strict 测, 验证严格模式仍锁传统 mismatch → ERROR 行为.
+        """
         self._set_wrong_fp()
-        r = _run(["status", "--root", str(tmp_path)], tmp_path)
+        r = _run(["status", "--strict", "--root", str(tmp_path)], tmp_path)
         # 必须报 mismatch
         assert "指纹不匹配" in r.stdout or "fingerprint mismatch" in r.stdout.lower(), (
-            f"Bug #48 回归：无 --trust-default 应仍报错: {r.stdout}"
+            f"v0.7.21.2 --strict 回归：无 --strict 应仍报错: {r.stdout}"
         )
         # fingerprint 未被自动修改
         current_fp = self.fp_path.read_text(encoding="utf-8").strip()
-        assert current_fp == "0" * 64, (
-            f"Bug #48 回归：无 flag 时 fingerprint 被静默修改"
+        assert current_fp == "f" * 63 + "g", (
+            f"v0.7.21.2 --strict 回归：--strict 模式下 fingerprint 被静默修改"
         )
 
 
