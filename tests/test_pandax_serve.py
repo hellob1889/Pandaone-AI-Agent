@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pandaone import pandaone_serve as _ps_mod  # v0.7.19 hotfix 2: patch.object target
 from pandaone.pandaone_serve import (
     AuditEventBus, AuditFileMonitor, _find_free_port, HAS_WATCHDOG,
 )
@@ -106,7 +107,7 @@ class TestAuditFileMonitor:
         (tmp_path / ".pandaone" / "pandaone.jsonl").touch()
         bus = AuditEventBus()
         monitor = AuditFileMonitor(tmp_path, bus)
-        with patch("pandaone.pandaone_serve.HAS_WATCHDOG", False):
+        with patch.object(_ps_mod, "HAS_WATCHDOG", False):
             assert monitor.start() is False
 
     @pytest.mark.skipif(not HAS_WATCHDOG, reason="watchdog 未安装")

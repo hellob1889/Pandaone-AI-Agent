@@ -43,7 +43,7 @@ $SCRIPTS_DIR = Join-Path $REPO_ROOT "scripts"
 
 # Common Windows git install locations
 $WINDOWS_GIT_CANDIDATES = @(
-    "D:\software\Git\cmd",
+    "D:\软件\Git\cmd",  # v0.7.19 fix: 原英文 software 硬编码是开发机旧名, 用户实际为中文
     "D:\Program Files\Git\cmd",
     "C:\Program Files\Git\cmd",
     "C:\Program Files (x86)\Git\cmd",
@@ -100,7 +100,7 @@ function Test-PythonVersion {
             if ($versionOutput -match "Python (\d+)\.(\d+)\.(\d+)") {
                 $major = [int]$Matches[1]
                 $minor = [int]$Matches[2]
-                if ($major -ge $MIN_PYTHON_MAJOR -and $minor -ge $MIN_PYTHON_MINOR) {
+                if ($major -gt $MIN_PYTHON_MAJOR -or ($major -eq $MIN_PYTHON_MAJOR -and $minor -ge $MIN_PYTHON_MINOR)) {
                     Write-OK "$versionOutput (>=$MIN_PYTHON_MAJOR.$MIN_PYTHON_MINOR)"
                     return $cmd
                 } else {

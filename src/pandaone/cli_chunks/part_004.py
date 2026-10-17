@@ -179,20 +179,28 @@ def _print_log(records):
 
 
 def _pid_alive(pid_text: str) -> bool:
-    """v0.7.15: 探测 watchdog PID 是否存活（POSIX 用 signal 0 探测）"""
+    """v0.7.19: 探测 watchdog PID 是否存活（跨平台用 psutil.pid_exists）"""
     try:
         pid = int(pid_text.strip())
     except (ValueError, AttributeError):
         return False
     if pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True  # 进程存在但属主不同
-    except OSError:
+    if pid > 2**31 - 1:
+        # psutil.pid_exists 内部转 C long, 超大 PID 抛 OverflowError
         return False
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except ImportError:
+        # psutil 未装时 fallback 到 os.kill (POSIX 正常, Windows 抛 WinError 87 仍 fail)
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True  # 进程存在但属主不同
+        except OSError:
+            return False
 
 
 def cmd_status(args):

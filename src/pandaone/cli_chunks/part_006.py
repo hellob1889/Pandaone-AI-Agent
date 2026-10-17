@@ -296,13 +296,24 @@ def main(argv=None):
     if lang_override is not None:
         args.lang = lang_override
     i18n_init(args.lang)
-    if "--update-fingerprint" in argv_list:
+    # v0.7.19 fix: --version / --help 跳过 fingerprint check (meta command 不需要)
+    _meta_cmds = ("--version", "-V", "--help", "-h")
+    _is_meta = any(a in _meta_cmds for a in argv_list)
+    if "--update-fingerprint" in argv_list or _is_meta:
         pass
     elif getattr(args, "trust_default", False):
         if not check_fingerprint(silent=True):
             new_fp = compute_fingerprint()
             FP_PATH.parent.mkdir(parents=True, exist_ok=True)
             FP_PATH.write_text(new_fp, encoding="utf-8")
+            # v0.7.19 fix: trust_default 走 audit log 留痕, 避免静默改写指纹
+            try:
+                _audit_log = FP_PATH.parent / "pandaone.jsonl"
+                _audit_log.parent.mkdir(parents=True, exist_ok=True)
+                with _audit_log.open("a", encoding="utf-8") as _f:
+                    _f.write("{\"event\": \"trust_default_fingerprint_update\", \"new\": \"" + new_fp + "\"}\n")
+            except Exception:
+                pass  # audit 写失败不影响主流程
     else:
         if not check_fingerprint():
             return 1

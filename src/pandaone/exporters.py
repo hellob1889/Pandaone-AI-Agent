@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from .i18n import t
+from . import __version__
 
 # ============================================================
 # 通用工具
@@ -392,7 +393,7 @@ def export_yaml(records: list[dict], path: Path):
             "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "count": len(records),
             "source": "pandaone",
-            "version": "0.1.0",
+            "version": __version__,
         },
         "records": records,
     }
