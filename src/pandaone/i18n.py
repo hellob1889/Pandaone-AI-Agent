@@ -60,6 +60,12 @@ TRANSLATIONS = {
         "err_fingerprint_hint": "如需合法更新: pandaone --update-fingerprint 0000",
         "err_password_wrong": "[ERROR] 密码错误，指纹未更新",
 
+        # v0.7.21.2 候选 #1: 指纹存版本号 + default auto-refresh
+        "info_fp_auto_refreshed": "[INFO] Pandaone {old_version} → {new_version} 指纹已自动更新 ({hash}...)",
+        "info_fp_migrated": "[INFO] 指纹格式已迁移 v1 (裸 hex) → v2 (json+version)",
+        "err_fp_strict_mismatch": "[ERROR] 严格模式下指纹不匹配: 存储 ({old_hash}...) ≠ 当前 ({new_hash}...)，疑似篡改",
+        "info_fp_version_change": "Pandaone {old_version} → {new_version} 指纹自动更新",
+
         # ============ init ============
         "ok_initialized": "[OK] 已初始化: {path}",
         "init_config": "  config: {path}",
