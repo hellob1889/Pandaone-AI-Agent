@@ -125,14 +125,12 @@ def _windows_registry_install(action, force=False):
                 # 先删子命令，再删主菜单 (顺序避免权限问题)
                 for name, _, _ in SUB_COMMANDS:
                     sub_path = f"{base}\\shell\\{name}"
-                    try:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path + "\\command")
-                    except FileNotFoundError:
-                        pass
-                    try:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path)
-                    except FileNotFoundError:
-                        pass
+                    # v0.7.20 P0-1 fix: 删 open\command 而不只是 command (Explorer 只认 open 层)
+                    for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                        try:
+                            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                        except FileNotFoundError:
+                            pass
                 try:
                     winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
                 except FileNotFoundError:
