@@ -70,6 +70,10 @@ image.png
 /index.html
 # 大体积临时 HTML 报告
 CodeAudit_项目文档.html
+# 工作目录（patch 脚本 / verify log / 评估文档 / release 草稿，不入仓）
+work/
+# Python wheel 解压根目录（pip install --target 临时产物，不入仓）
+pandaone_guard-*/
 
 # ============================================================
 # 独立 git 仓库（demo 自带 .git，不应被主仓库接管）
