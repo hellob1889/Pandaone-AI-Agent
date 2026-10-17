@@ -289,6 +289,10 @@ TRANSLATIONS = {
         "ctx_already_installed": "[INFO] Pandaone 右键菜单已存在。使用 --force 重新安装。",
         "ctx_perm_error": "[ERROR] 注册表权限不足: {err}",
         "ctx_perm_hint": "提示: HKCU 通常不需要管理员权限, 如仍报错请检查用户配置",
+        # v0.7.21: Win11 锁 Directory\shell \Background, 单 base_key PermissionError 时跳过
+        "ctx_win11_lock_skip": "[WARN] Win11 锁已跳过: {base} ({err})",
+        # v0.7.21: 部分安装摘要
+        "ctx_partial_install_summary": "部分安装: {ok}/{total} 个右键菜单位置已注册 (失败: {fail})",
 
         # ============ install-git ============
         "git_probe_check": "[INFO] 探测 git ...",
