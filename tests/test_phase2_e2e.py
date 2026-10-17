@@ -169,9 +169,16 @@ def test_l5_fingerprint_protects_pandaone_itself(tmp_path):
     fp_path = Path.home() / ".pandaone_fp.txt"
     assert fp_path.exists(), "指纹文件未生成"
 
+    import json as _json3
     import hashlib
     expected = compute_fingerprint()
-    actual = fp_path.read_text(encoding="utf-8").strip()
+    actual_raw = fp_path.read_text(encoding="utf-8").strip()
+    # v0.7.21.2: FP_PATH 是 json {version, hash, stored_at}, 取 hash 字段比对
+    try:
+        actual = _json3.loads(actual_raw)["hash"]
+    except (ValueError, KeyError):
+        # 兼容旧裸 hex 格式
+        actual = actual_raw
     assert actual == expected, f"指纹不一致: 存储={actual[:16]}, 期望={expected[:16]}"
 
 
