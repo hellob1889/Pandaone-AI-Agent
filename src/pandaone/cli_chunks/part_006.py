@@ -351,7 +351,9 @@ def main(argv=None):
         if not check_fingerprint(silent=True):
             new_fp = compute_fingerprint()
             FP_PATH.parent.mkdir(parents=True, exist_ok=True)
-            FP_PATH.write_text(new_fp, encoding="utf-8")
+            # v0.7.21.3 fix: 走 _save_fp json 格式（含 version + hash + stored_at）,
+            #   跟 v0.7.21.2 设计的存储格式一致，文档一致 (README 描述 json).
+            _save_fp(_get_pandaone_version(), new_fp)
             # v0.7.19 fix: trust_default 走 audit log 留痕, 避免静默改写指纹
             try:
                 _audit_log = FP_PATH.parent / "pandaone.jsonl"
