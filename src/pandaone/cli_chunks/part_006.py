@@ -162,6 +162,7 @@ def _windows_registry_install(action, force=False):
         print(t("ctx_pandaone_ok", exe=pandaone_exe))
 
         # 清理旧条目 (幂等)
+        # v0.7.21 hotfix: Win11 锁 base_key 也会抛 OSError (PermissionError 子类), 加 catch 跳过
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
@@ -169,41 +170,69 @@ def _windows_registry_install(action, force=False):
                 for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
                     try:
                         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
-                    except FileNotFoundError:
+                    except (FileNotFoundError, OSError):
                         pass
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 pass
         print(t("ctx_step1"))
 
         icon_value = f'"{pandaone_exe}",0'
+        # v0.7.21: try/except per BASE_KEY. Win11 锁 Directory\shell + Directory\Background\shell
+        # 报 WinError 5 (PermissionError) 时, log warning + 继续下一个 base_key.
+        # 装机用户至少 1/3 base_key (*\shell 文件右键) 能用, 不再 100% 失败.
+        base_results = []  # [(base, "OK" | "SKIP", err_msg)]
         for base in BASE_KEYS:
-            # 主菜单 (cascade = submenu)
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
-                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
-                winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
-                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
-                # v0.7.20 P0-1 fix: 写真实 SubCommands 列表 (之前写空字符串 Explorer 判 0 子菜单隐藏)
-                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ,
-                                  r"shell\Init;shell\Lock;shell\Status;shell\Unlock")
-            # 4 个 subcommands
-            for name, label, action_cmd in SUB_COMMANDS:
-                sub_path = f"{base}\\shell\\{name}"
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
-                    winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
-                    winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
-                # v0.7.20 P0-1 fix: Explorer 只认 \open\command 路径
-                # v0.7.20 P0-3 fix: 去掉 --trust-default, 避免右键菜单静默关 L5 自校验
-                cmd_path = f"{sub_path}\\open\\command"
-                cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
-                    winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
+            try:
+                # 主菜单 (cascade = submenu)
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
+                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
+                    winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
+                    winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
+                    # v0.7.20 P0-1 fix: 写真实 SubCommands 列表 (之前写空字符串 Explorer 判 0 子菜单隐藏)
+                    winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ,
+                                      r"shell\Init;shell\Lock;shell\Status;shell\Unlock")
+                # 4 个 subcommands
+                for name, label, action_cmd in SUB_COMMANDS:
+                    sub_path = f"{base}\\shell\\{name}"
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
+                        winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
+                        winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
+                    # v0.7.20 P0-1 fix: Explorer 只认 \open\command 路径
+                    # v0.7.20 P0-3 fix: 去掉 --trust-default, 避免右键菜单静默关 L5 自校验
+                    cmd_path = f"{sub_path}\\open\\command"
+                    cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
+                        winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
+                base_results.append((base, "OK", None))
+            except PermissionError as e:
+                # Win11 锁常见. 跳过, log warning, 继续下一个 base_key.
+                base_results.append((base, "SKIP", str(e)))
+                print(t("ctx_win11_lock_skip", base=base, err=e), file=sys.stderr)
+            except OSError as e:
+                # 其他 OS 错 (PERM 也归 OSError 父类), 同样 skip 保持向后兼容
+                base_results.append((base, "SKIP", str(e)))
+                print(t("ctx_win11_lock_skip", base=base, err=e), file=sys.stderr)
+
+        # v0.7.21: 统计 1+ OK 才算整体成功. 0 OK 仍 fail.
+        ok_count = sum(1 for _, s, _ in base_results if s == "OK")
+        skip_count = sum(1 for _, s, _ in base_results if s == "SKIP")
+        if ok_count == 0:
+            # 3 个 base_key 全 fail (极少见, 整 HKCU 写不进去), 报 ERROR
+            print(t("ctx_self_check_fail"), file=sys.stderr)
+            return 1
+        if skip_count > 0:
+            # 部分安装, 告诉 user 哪几个 skip
+            print(t("ctx_partial_install_summary", ok=ok_count, total=len(BASE_KEYS), fail=skip_count))
         # v0.7.20 P0-1 fix: 装后自检回读, 验证 Explorer 能解析所有 verb
         # 不然写完注册表但 verb 不可调用, 用户右键看不到菜单
+        # v0.7.21: 自检只检查 OK 的 base_key, SKIP 的不参与自检
         print(t("ctx_step2"))
         self_check_ok = True
-        for base in BASE_KEYS:
+        for base, status, _ in base_results:
+            if status != "OK":
+                continue  # SKIP 跳过自检
             for name, _, _ in SUB_COMMANDS:
                 verb_path = f"{base}\\shell\\{name}\\open\\command"
                 try:
