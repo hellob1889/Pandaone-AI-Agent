@@ -452,6 +452,12 @@ TRANSLATIONS = {
         "err_fingerprint_hint": "To update legally: pandaone --update-fingerprint 0000",
         "err_password_wrong": "[ERROR] Wrong password, fingerprint not updated",
 
+        # v0.7.21.2 candidate #1: store fingerprint with version, default auto-refresh
+        "info_fp_auto_refreshed": "[INFO] Pandaone {old_version} → {new_version} fingerprint auto-refreshed ({hash}...)",
+        "info_fp_migrated": "[INFO] Fingerprint format migrated v1 (raw hex) → v2 (json+version)",
+        "err_fp_strict_mismatch": "[ERROR] Strict mode fingerprint mismatch: stored ({old_hash}...) ≠ current ({new_hash}...); possible tamper",
+        "info_fp_version_change": "Pandaone {old_version} → {new_version} fingerprint auto-refreshed",
+
         # ============ init ============
         "ok_initialized": "[OK] Initialized: {path}",
         # Bug #28 (Solution A): lock auto-init info
