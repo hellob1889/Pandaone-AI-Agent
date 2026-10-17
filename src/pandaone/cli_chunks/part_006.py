@@ -183,7 +183,9 @@ def _windows_registry_install(action, force=False):
                 winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
                 winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
-                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
+                # v0.7.20 P0-1 fix: 写真实 SubCommands 列表 (之前写空字符串 Explorer 判 0 子菜单隐藏)
+                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ,
+                                  r"shell\Init;shell\Lock;shell\Status;shell\Unlock")
             # 4 个 subcommands
             for name, label, action_cmd in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
