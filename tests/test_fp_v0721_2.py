@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 
 from pandaone import i18n
-from pandaone.cli_chunks import part_002
+from pandaone.cli_chunks import part_001, part_002
 
 
 def test_v0721_2_info_fp_auto_refreshed_exists_zh():
@@ -47,7 +47,10 @@ def test_v0721_2_check_fingerprint_default_auto_refresh_on_version_change():
     """v0.7.21.2: 默认模式 hash mismatch + version 变 → auto-refresh (True)."""
     with tempfile.TemporaryDirectory() as tmp:
         fp_path = Path(tmp) / ".pandaone_fp.txt"
-        with mock.patch.object(part_002, "FP_PATH", fp_path):
+        # FP_PATH + t() 都在 part_001, cli.py loader 共享 namespace.
+        # 测试直接 import part_002 没 part_001 globals, 用 create=True 注入.
+        with mock.patch.object(part_002, "FP_PATH", fp_path, create=True), \
+             mock.patch.object(part_002, "t", i18n.t, create=True):
             fp_path.write_text(
                 json.dumps({
                     "version": "0.7.20",
@@ -69,7 +72,8 @@ def test_v0721_2_check_fingerprint_strict_blocks_version_change():
     """v0.7.21.2: strict=True 模式任何 mismatch 都报 ERROR (False)."""
     with tempfile.TemporaryDirectory() as tmp:
         fp_path = Path(tmp) / ".pandaone_fp.txt"
-        with mock.patch.object(part_002, "FP_PATH", fp_path):
+        with mock.patch.object(part_002, "FP_PATH", fp_path, create=True), \
+             mock.patch.object(part_002, "t", i18n.t, create=True):
             fp_path.write_text(
                 json.dumps({
                     "version": "0.7.20",
