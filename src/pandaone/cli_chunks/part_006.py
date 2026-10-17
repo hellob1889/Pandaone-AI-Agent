@@ -1,6 +1,9 @@
 # cli.py chunk 6/6: lines 2069-2351
 # Phase 9: OS 右键菜单集成
 # ============================================================
+# v0.7.21.3 hotfix: 顶部独立 import pathlib.Path (之前依赖 cli.py loader 共享
+#   part_001 注入 namespace; 单 import 不走 loader 报 NameError on Path).
+from pathlib import Path
 def _find_installer_dir():
     """定位 installer/ 目录。"""
     return Path(__file__).resolve().parent / "installer"
