@@ -52,9 +52,15 @@ class TestBug48TrustDefaultPositionIndependent:
             self.fp_path.unlink()
 
     def _set_wrong_fp(self):
-        """写入错误的 fingerprint 模拟 mismatch"""
+        """写入错误的 fingerprint 模拟 mismatch.
+
+        v0.7.21.2 起:
+          - 旧 hex "0"*64 → 走 legacy migrate (auto-refresh, 不报错) → 不能触发 mismatch 测
+          - 非 hex 字符 "f"*63 + "g" → 解析失败, 视为损坏 → 走 ERROR 路径
+        """
         self.fp_path.parent.mkdir(parents=True, exist_ok=True)
-        self.fp_path.write_text("0" * 64, encoding="utf-8")
+        # 用非 hex 字符 (末位 'g' 不是 hex) 模拟真篡改
+        self.fp_path.write_text("f" * 63 + "g", encoding="utf-8")
 
     def test_trust_default_after_subcommand_updates_fp(self, tmp_path):
         """--trust-default 在子命令后也能生效（修复后）"""
@@ -78,18 +84,23 @@ class TestBug48TrustDefaultPositionIndependent:
         new_fp = self.fp_path.read_text(encoding="utf-8").strip()
         assert new_fp != "0" * 64
 
-    def test_without_trust_default_still_fails(self, tmp_path):
-        """不带 --trust-default 时仍应报错（安全：避免静默改 fingerprint）"""
+    def test_strict_mode_rejects_mismatch(self, tmp_path):
+        """v0.7.21.2: --strict 模式下 fingerprint 不匹配应报错且不被自动更新 (锁传统行为).
+
+        Bug #48 老 test 期望"无 --trust-default 时 fingerprint 保持 0*64 不变".
+        v0.7.21.2 默认 auto-refresh 改了这行为 (这就是痛点修复本身).
+        改用 --strict 测, 验证严格模式仍锁传统 mismatch → ERROR 行为.
+        """
         self._set_wrong_fp()
-        r = _run(["status", "--root", str(tmp_path)], tmp_path)
+        r = _run(["status", "--strict", "--root", str(tmp_path)], tmp_path)
         # 必须报 mismatch
         assert "指纹不匹配" in r.stdout or "fingerprint mismatch" in r.stdout.lower(), (
-            f"Bug #48 回归：无 --trust-default 应仍报错: {r.stdout}"
+            f"v0.7.21.2 --strict 回归：无 --strict 应仍报错: {r.stdout}"
         )
         # fingerprint 未被自动修改
         current_fp = self.fp_path.read_text(encoding="utf-8").strip()
-        assert current_fp == "0" * 64, (
-            f"Bug #48 回归：无 flag 时 fingerprint 被静默修改"
+        assert current_fp == "f" * 63 + "g", (
+            f"v0.7.21.2 --strict 回归：--strict 模式下 fingerprint 被静默修改"
         )
 
 

@@ -47,12 +47,25 @@ def _check_layer5_self_fingerprint() -> dict:
     if not FP_PATH.exists():
         return {"ok": True, "note": "no stored fingerprint (first run)"}
     try:
-        stored = FP_PATH.read_text(encoding='utf-8').strip()
+        stored_raw = FP_PATH.read_text(encoding='utf-8').strip()
     except Exception as e:
         return {"ok": False, "note": f"read fingerprint failed: {e}"}
+    # v0.7.21.2: FP_PATH 是 json {version, hash, stored_at}, 取 hash 字段比对
+    try:
+        stored_data = _json.loads(stored_raw)
+        if isinstance(stored_data, dict) and "hash" in stored_data:
+            stored = stored_data["hash"]
+            stored_version = stored_data.get("version", "unknown")
+        else:
+            stored = stored_raw
+            stored_version = "0.0.0+legacy"
+    except (ValueError, _json.JSONDecodeError):
+        # 兼容旧裸 hex 格式
+        stored = stored_raw
+        stored_version = "0.0.0+legacy"
     if stored == current:
-        return {"ok": True, "note": "matches stored fingerprint"}
-    return {"ok": False, "note": "TAMPERED (stored != current SHA256)"}
+        return {"ok": True, "note": f"matches stored fingerprint (v{stored_version})"}
+    return {"ok": False, "note": f"TAMPERED (stored v{stored_version} != current SHA256)"}
 
 
 def _check_layer6_tamper_detection() -> dict:
