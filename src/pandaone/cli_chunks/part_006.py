@@ -198,7 +198,23 @@ def _windows_registry_install(action, force=False):
                 cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
                     winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
+        # v0.7.20 P0-1 fix: 装后自检回读, 验证 Explorer 能解析所有 verb
+        # 不然写完注册表但 verb 不可调用, 用户右键看不到菜单
         print(t("ctx_step2"))
+        self_check_ok = True
+        for base in BASE_KEYS:
+            for name, _, _ in SUB_COMMANDS:
+                verb_path = f"{base}\\shell\\{name}\\open\\command"
+                try:
+                    _k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, verb_path)
+                    _v, _ = winreg.QueryValueEx(_k, "")
+                    winreg.CloseKey(_k)
+                except FileNotFoundError:
+                    print(f"  [ERROR] verb 不可解析: {verb_path}", file=sys.stderr)
+                    self_check_ok = False
+        if not self_check_ok:
+            print("[FAIL] 装后自检失败, 右键菜单不会显示, 请重试", file=sys.stderr)
+            return 1
         print(t("ctx_step3"))
 
         print()
