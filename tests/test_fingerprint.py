@@ -112,7 +112,7 @@ def test_update_fingerprint_with_default_password():
 
     # 指纹应被重写
     assert FP_PATH.exists()
-    assert compute_sha256(PANDAX) == FP_PATH.read_text(encoding="utf-8").strip()
+    assert compute_fingerprint() == FP_PATH.read_text(encoding="utf-8").strip()
 
 
 def test_update_fingerprint_with_wrong_password():
