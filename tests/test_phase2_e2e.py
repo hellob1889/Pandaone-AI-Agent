@@ -32,6 +32,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def compute_fingerprint() -> str:
+    """v0.7.20 P0-2: call new multi-file hash algorithm, fallback to 0.7.19 single-file hash on Exception."""
+    try:
+        from pandaone.cli_chunks.part_002 import compute_fingerprint as _cfp
+        return _cfp()
+    except Exception:
+        return hashlib.sha256((ROOT / "src" / "pandaone" / "cli.py").read_bytes()).hexdigest()
 sys.path.insert(0, str(ROOT))
 
 from pandaone_guard import PandaXHandler  # noqa: E402
