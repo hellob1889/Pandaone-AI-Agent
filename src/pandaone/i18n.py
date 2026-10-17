@@ -833,15 +833,24 @@ def _detect_os_language() -> str:
             return "en"
 
     # 2. locale 模块（Windows + Unix）
+    # v0.7.20 P2 fix: locale.getdefaultlocale() 在 Python 3.12+ 已 deprecated, 3.13+ 计划 remove
+    # 改用 locale.getlocale() first, fallback 到 os.environ (LANG/LC_ALL/LC_MESSAGES)
+    import os as _os
+    loc = None
     try:
-        loc = locale.getdefaultlocale()[0]  # e.g. "zh_CN", "en_US"
-        if loc:
-            if loc.lower().startswith("zh"):
-                return "zh-CN"
-            if loc.lower().startswith("en"):
-                return "en"
+        loc = locale.getlocale()[0]
     except Exception:
         pass
+    if not loc:
+        loc = (_os.environ.get("LC_ALL")
+               or _os.environ.get("LC_MESSAGES")
+               or _os.environ.get("LANG")
+               or "")
+    if loc:
+        if loc.lower().startswith("zh"):
+            return "zh-CN"
+        if loc.lower().startswith("en"):
+            return "en"
 
     # 3. Windows 特定：GetUserDefaultLocaleName
     if sys.platform == "win32":
