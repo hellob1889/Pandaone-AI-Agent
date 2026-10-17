@@ -394,7 +394,8 @@ def main(argv=None):
             print(t("err_password_wrong"))
             return 1
         new_fp = compute_fingerprint()
-        FP_PATH.write_text(new_fp, encoding="utf-8")
+        # v0.7.21.3 fix: 走 _save_fp json 格式（跟 _load_fp / check_fingerprint 一致）
+        _save_fp(_get_pandaone_version(), new_fp)
         print(t("ok_fp_updated", fp=new_fp[:16]))
         return 0
     if args.command is None:
