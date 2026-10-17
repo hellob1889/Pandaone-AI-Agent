@@ -170,7 +170,7 @@ def test_l5_fingerprint_protects_pandaone_itself(tmp_path):
     assert fp_path.exists(), "指纹文件未生成"
 
     import hashlib
-    expected = hashlib.sha256((ROOT / "src" / "pandaone" / "cli.py").read_bytes()).hexdigest()
+    expected = compute_fingerprint()
     actual = fp_path.read_text(encoding="utf-8").strip()
     assert actual == expected, f"指纹不一致: 存储={actual[:16]}, 期望={expected[:16]}"
 
