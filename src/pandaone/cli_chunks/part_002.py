@@ -34,8 +34,26 @@ def get_fingerprint_password() -> str:
 
 
 def compute_fingerprint() -> str:
-    """计算 pandaone.py 自身的 SHA256"""
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    """v0.7.20 P0-2 fix: 算 pandaone/ 全部 .py 文件的多文件 SHA256 hash.
+
+    旧版 (v0.7.9~v0.7.19) 只哈希 Path(__file__).read_bytes() 一个文件,
+    改任意其他 part (part_001/003/004/005/006 等) 都不影响 fingerprint,
+    L5 自校验被绕过.
+
+    新版: rglob("*.py") 走 pandaone/ 整目录, 按相对路径排序 deterministic,
+    改任意 .py 文件都改变 hash, 改文件名/新增/删除文件也改变 hash.
+    升级 v0.7.20 后装机用户需手动跑 pandaone --update-fingerprint 重算.
+    """
+    pandaone_root = Path(__file__).resolve().parent.parent
+    files = sorted(p for p in pandaone_root.rglob("*.py") if p.is_file())
+    h = hashlib.sha256()
+    for f in files:
+        rel = str(f.relative_to(pandaone_root))
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(f.read_bytes())
+        h.update(b"\x00")
+    return h.hexdigest()
 
 
 def check_fingerprint(silent: bool = False) -> bool:
