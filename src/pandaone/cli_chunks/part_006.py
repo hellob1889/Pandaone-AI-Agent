@@ -162,6 +162,7 @@ def _windows_registry_install(action, force=False):
         print(t("ctx_pandaone_ok", exe=pandaone_exe))
 
         # 清理旧条目 (幂等)
+        # v0.7.21 hotfix: Win11 锁 base_key 也会抛 OSError (PermissionError 子类), 加 catch 跳过
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
@@ -169,11 +170,11 @@ def _windows_registry_install(action, force=False):
                 for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
                     try:
                         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
-                    except FileNotFoundError:
+                    except (FileNotFoundError, OSError):
                         pass
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
-            except FileNotFoundError:
+            except (FileNotFoundError, OSError):
                 pass
         print(t("ctx_step1"))
 
