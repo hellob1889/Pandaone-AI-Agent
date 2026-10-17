@@ -42,6 +42,15 @@ def compute_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def compute_fingerprint() -> str:
+    """v0.7.20 P0-2: call new multi-file hash algorithm, fallback to 0.7.19 single-file hash on Exception."""
+    try:
+        from pandaone.cli_chunks.part_002 import compute_fingerprint as _cfp
+        return _cfp()
+    except Exception:
+        return hashlib.sha256((ROOT / "src" / "pandaone" / "cli.py").read_bytes()).hexdigest()
+
+
 def test_fingerprint_file_exists_after_run():
     """运行 CLI 后 .pandaone_fp.txt 应被创建"""
     if FP_PATH.exists():
@@ -58,7 +67,7 @@ def test_fingerprint_matches_pandaone_py():
         FP_PATH.unlink()
     run([])
     stored = FP_PATH.read_text(encoding="utf-8").strip()
-    expected = compute_sha256(PANDAX)
+    expected = compute_fingerprint()
     assert stored == expected, f"指纹不匹配:\n  存储: {stored}\n  期望: {expected}"
 
 
@@ -103,7 +112,7 @@ def test_update_fingerprint_with_default_password():
 
     # 指纹应被重写
     assert FP_PATH.exists()
-    assert compute_sha256(PANDAX) == FP_PATH.read_text(encoding="utf-8").strip()
+    assert compute_fingerprint() == FP_PATH.read_text(encoding="utf-8").strip()
 
 
 def test_update_fingerprint_with_wrong_password():

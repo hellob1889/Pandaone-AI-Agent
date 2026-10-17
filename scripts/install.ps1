@@ -43,7 +43,7 @@ $SCRIPTS_DIR = Join-Path $REPO_ROOT "scripts"
 
 # Common Windows git install locations
 $WINDOWS_GIT_CANDIDATES = @(
-    "D:\软件\Git\cmd",  # v0.7.19 fix: 原英文 software 硬编码是开发机旧名, 用户实际为中文
+
     "D:\Program Files\Git\cmd",
     "C:\Program Files\Git\cmd",
     "C:\Program Files (x86)\Git\cmd",

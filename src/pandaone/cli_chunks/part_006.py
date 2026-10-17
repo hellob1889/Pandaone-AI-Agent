@@ -92,17 +92,18 @@ def _find_pandaone_exe_windows():
 
 def _windows_registry_install(action, force=False):
     """
-    v0.7.9 fix (PR #35): Windows 直接用 Python winreg 写注册表,
-    完全 bypass PowerShell. 修复 5 个累积 bug (BOM / #Requires / [CmdletBinding()]
-    函数体内 $ErrorActionPreference / PowerShell 7+ 表达式 if 语法 / 注释内 () 干扰 parser).
-    注册表结构与原 PS1 等价:
-      HKCU\\Software\\Classes\\*\\shell\\Pandaone (任意文件右键)
+    v0.7.9 fix (PR #35): Windows uses Python winreg directly to write registry,
+    completely bypassing PowerShell. Fixes 5 accumulated bugs (BOM / #Requires /
+    [CmdletBinding()] / $ErrorActionPreference inside function body / PowerShell 7+
+    expression-if syntax / parentheses in comments confusing parser).
+    Registry structure equivalent to the original PS1:
+      HKCU\\Software\\Classes\\*\\shell\\Pandaone (right-click on any file)
           \\shell\\Init\\shell\\open\\command  → pandaone init --root "%V"
           \\shell\\Lock\\shell\\open\\command  → pandaone lock --root "%V"
           \\shell\\Status\\shell\\open\\command → pandaone status --root "%V"
           \\shell\\Unlock\\shell\\open\\command → pandaone unlock --root "%V"
-      HKCU\\Software\\Classes\\Directory\\shell\\Pandaone (目录右键)
-      HKCU\\Software\\Classes\\Directory\\Background\\shell\\Pandaone (空白处右键)
+      HKCU\\Software\\Classes\\Directory\\shell\\Pandaone (right-click on directory)
+      HKCU\\Software\\Classes\\Directory\\Background\\shell\\Pandaone (right-click on background)
     """
     import winreg
 
@@ -112,10 +113,10 @@ def _windows_registry_install(action, force=False):
         r"Software\Classes\Directory\Background\shell\Pandaone",
     ]
     SUB_COMMANDS = [
-        ("Init",   "初始化 Pandaone (init)", "init"),
-        ("Lock",   "锁定文件 (lock)",       "lock"),
-        ("Status", "查看状态 (status)",     "status"),
-        ("Unlock", "解锁文件 (unlock)",     "unlock"),
+        ("Init",   "Pandaone Init (init)",   "init"),
+        ("Lock",   "Pandaone Lock (lock)",   "lock"),
+        ("Status", "Pandaone Status (status)", "status"),
+        ("Unlock", "Pandaone Unlock (unlock)", "unlock"),
     ]
 
     try:
@@ -125,14 +126,12 @@ def _windows_registry_install(action, force=False):
                 # 先删子命令，再删主菜单 (顺序避免权限问题)
                 for name, _, _ in SUB_COMMANDS:
                     sub_path = f"{base}\\shell\\{name}"
-                    try:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path + "\\command")
-                    except FileNotFoundError:
-                        pass
-                    try:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path)
-                    except FileNotFoundError:
-                        pass
+                    # v0.7.20 P0-1 fix: 删 open\command 而不只是 command (Explorer 只认 open 层)
+                    for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                        try:
+                            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                        except FileNotFoundError:
+                            pass
                 try:
                     winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
                 except FileNotFoundError:
@@ -166,14 +165,12 @@ def _windows_registry_install(action, force=False):
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
-                try:
-                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path + "\\command")
-                except FileNotFoundError:
-                    pass
-                try:
-                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub_path)
-                except FileNotFoundError:
-                    pass
+                # v0.7.20 P0-1 fix: 删 open\command 而不只是 command
+                for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                    try:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                    except FileNotFoundError:
+                        pass
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
             except FileNotFoundError:
@@ -187,18 +184,38 @@ def _windows_registry_install(action, force=False):
                 winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
                 winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
-                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
+                # v0.7.20 P0-1 fix: 写真实 SubCommands 列表 (之前写空字符串 Explorer 判 0 子菜单隐藏)
+                winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ,
+                                  r"shell\Init;shell\Lock;shell\Status;shell\Unlock")
             # 4 个 subcommands
             for name, label, action_cmd in SUB_COMMANDS:
                 sub_path = f"{base}\\shell\\{name}"
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
                     winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
                     winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
-                cmd_path = f"{sub_path}\\command"
-                cmd_value = f'"{pandaone_exe}" --silent --trust-default {action_cmd} --root "%V"'
+                # v0.7.20 P0-1 fix: Explorer 只认 \open\command 路径
+                # v0.7.20 P0-3 fix: 去掉 --trust-default, 避免右键菜单静默关 L5 自校验
+                cmd_path = f"{sub_path}\\open\\command"
+                cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
                     winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
+        # v0.7.20 P0-1 fix: 装后自检回读, 验证 Explorer 能解析所有 verb
+        # 不然写完注册表但 verb 不可调用, 用户右键看不到菜单
         print(t("ctx_step2"))
+        self_check_ok = True
+        for base in BASE_KEYS:
+            for name, _, _ in SUB_COMMANDS:
+                verb_path = f"{base}\\shell\\{name}\\open\\command"
+                try:
+                    _k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, verb_path)
+                    _v, _ = winreg.QueryValueEx(_k, "")
+                    winreg.CloseKey(_k)
+                except FileNotFoundError:
+                    print(t("ctx_self_check_verb_err", verb_path=verb_path), file=sys.stderr)
+                    self_check_ok = False
+        if not self_check_ok:
+            print(t("ctx_self_check_fail"), file=sys.stderr)
+            return 1
         print(t("ctx_step3"))
 
         print()

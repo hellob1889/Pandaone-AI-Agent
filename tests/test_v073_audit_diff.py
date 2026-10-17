@@ -46,7 +46,13 @@ def panda_project(tmp_path):
     import hashlib
     from pathlib import Path
     fp_path = Path.home() / ".pandaone_fp.txt"
-    cur = hashlib.sha256((Path(__file__).parent.parent / "src" / "pandaone" / "cli.py").read_bytes()).hexdigest()
+    # v0.7.20 P0-2 fix: 改用多文件 hash 算法 (compute_fingerprint), 跟 0.7.19 单文件 sha256 兼容
+    try:
+        from pandaone.cli_chunks.part_002 import compute_fingerprint as _cfp
+        cur = _cfp()
+    except Exception:
+        # fallback: 旧版单文件 hash (0.7.19 兼容路径)
+        cur = hashlib.sha256((Path(__file__).parent.parent / "src" / "pandaone" / "cli.py").read_bytes()).hexdigest()
     fp_path.write_text(cur, encoding="utf-8")
     # 初始化 Pandaone
     from pandaone.cli import main as cli_main

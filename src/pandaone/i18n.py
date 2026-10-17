@@ -280,6 +280,8 @@ TRANSLATIONS = {
         "ctx_test_step3": "  3. 展开后看到：Init / Lock / Status / Unlock",
         "ctx_uninstall_label": "卸载：",
         "ctx_install_restart_hint": "如果右键菜单没立刻出现，请重启资源管理器：",
+        "ctx_self_check_verb_err": "  [ERROR] verb 不可解析: {verb_path}",
+        "ctx_self_check_fail": "[FAIL] 装后自检失败, 右键菜单不会显示, 请重试",
         "ctx_uninstall_done": "[OK] 已卸载右键菜单",
         "ctx_uninstall_restart_hint": "如果右键菜单依然残留，请重启资源管理器：",
         "ctx_exe_not_found": "[WARN] 未找到 pandaone 可执行文件！",
@@ -659,6 +661,8 @@ TRANSLATIONS = {
         "ctx_test_step3": "  3. Expand to see: Init / Lock / Status / Unlock",
         "ctx_uninstall_label": "Uninstall:",
         "ctx_install_restart_hint": "If the right-click menu doesn't appear immediately, restart Explorer:",
+        "ctx_self_check_verb_err": "  [ERROR] verb not resolvable: {verb_path}",
+        "ctx_self_check_fail": "[FAIL] post-install self-check failed, right-click menu will not appear, please retry",
         "ctx_uninstall_done": "[OK] Right-click menu uninstalled",
         "ctx_uninstall_restart_hint": "If the right-click menu persists, restart Explorer:",
         "ctx_exe_not_found": "[WARN] pandaone executable not found!",
@@ -833,15 +837,24 @@ def _detect_os_language() -> str:
             return "en"
 
     # 2. locale 模块（Windows + Unix）
+    # v0.7.20 P2 fix: locale.getdefaultlocale() 在 Python 3.12+ 已 deprecated, 3.13+ 计划 remove
+    # 改用 locale.getlocale() first, fallback 到 os.environ (LANG/LC_ALL/LC_MESSAGES)
+    import os as _os
+    loc = None
     try:
-        loc = locale.getdefaultlocale()[0]  # e.g. "zh_CN", "en_US"
-        if loc:
-            if loc.lower().startswith("zh"):
-                return "zh-CN"
-            if loc.lower().startswith("en"):
-                return "en"
+        loc = locale.getlocale()[0]
     except Exception:
         pass
+    if not loc:
+        loc = (_os.environ.get("LC_ALL")
+               or _os.environ.get("LC_MESSAGES")
+               or _os.environ.get("LANG")
+               or "")
+    if loc:
+        if loc.lower().startswith("zh"):
+            return "zh-CN"
+        if loc.lower().startswith("en"):
+            return "en"
 
     # 3. Windows 特定：GetUserDefaultLocaleName
     if sys.platform == "win32":
