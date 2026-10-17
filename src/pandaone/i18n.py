@@ -674,6 +674,10 @@ TRANSLATIONS = {
         "ctx_already_installed": "[INFO] Pandaone right-click menu already exists. Use --force to reinstall.",
         "ctx_perm_error": "[ERROR] Insufficient registry permissions: {err}",
         "ctx_perm_hint": "Hint: HKCU usually doesn't require admin. If it fails, check user profile.",
+        # v0.7.21: Win11 lock Directory\shell \Background, skip on per-base_key PermissionError
+        "ctx_win11_lock_skip": "[WARN] Win11 lock skipped: {base} ({err})",
+        # v0.7.21: partial install summary
+        "ctx_partial_install_summary": "Partial install: {ok}/{total} right-click menu locations registered (failed: {fail})",
 
         # ============ install-git ============
         "git_probe_found": "[OK] git installed: {path}",
