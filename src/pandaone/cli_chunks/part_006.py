@@ -1,6 +1,9 @@
 # cli.py chunk 6/6: lines 2069-2351
 # Phase 9: OS 右键菜单集成
 # ============================================================
+# v0.7.21.3 hotfix: 顶部独立 import pathlib.Path (之前依赖 cli.py loader 共享
+#   part_001 注入 namespace; 单 import 不走 loader 报 NameError on Path).
+from pathlib import Path
 def _find_installer_dir():
     """定位 installer/ 目录。"""
     return Path(__file__).resolve().parent / "installer"
@@ -351,7 +354,9 @@ def main(argv=None):
         if not check_fingerprint(silent=True):
             new_fp = compute_fingerprint()
             FP_PATH.parent.mkdir(parents=True, exist_ok=True)
-            FP_PATH.write_text(new_fp, encoding="utf-8")
+            # v0.7.21.3 fix: 走 _save_fp json 格式（含 version + hash + stored_at）,
+            #   跟 v0.7.21.2 设计的存储格式一致，文档一致 (README 描述 json).
+            _save_fp(_get_pandaone_version(), new_fp)
             # v0.7.19 fix: trust_default 走 audit log 留痕, 避免静默改写指纹
             try:
                 _audit_log = FP_PATH.parent / "pandaone.jsonl"
@@ -392,7 +397,8 @@ def main(argv=None):
             print(t("err_password_wrong"))
             return 1
         new_fp = compute_fingerprint()
-        FP_PATH.write_text(new_fp, encoding="utf-8")
+        # v0.7.21.3 fix: 走 _save_fp json 格式（跟 _load_fp / check_fingerprint 一致）
+        _save_fp(_get_pandaone_version(), new_fp)
         print(t("ok_fp_updated", fp=new_fp[:16]))
         return 0
     if args.command is None:
