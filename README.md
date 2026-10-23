@@ -128,6 +128,22 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 ./scripts/install.sh
 ```
 
+**方式 C：Windows 一键安装包（推荐 Windows 用户）**
+
+下载 `PandaoneSetup-<版本>-x64.exe`（GitHub Releases），双击安装即可 —— **免管理员权限**（装到 `%LOCALAPPDATA%\Pandaone`），自动完成：
+
+- 安装 `pandaone.exe` / `pandaone_guard.exe` / `pandaone-mcp.exe`
+- 加入用户 PATH（写 HKCU，不需要管理员）
+- 安装 Windows 右键菜单（文件 / 目录 / 空白处，级联 Init / Lock / Status / Unlock）
+- 可选勾选：把 MCP server 注册进 Claude Desktop / Cursor / Trae
+
+装完直接用：
+
+```bash
+pandaone setup      # 一键本地部署（git + 仓库 + 审计 + 看门狗 + 右键菜单 + 仪表盘）
+pandaone doctor     # 环境体检
+```
+
 **安装脚本自动做 / Install script auto-handles**：
 1. 检测 Python ≥ 3.10
 2. 探测 git（不在 PATH 时尝试常见安装路径）
@@ -135,6 +151,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 4. `pip install -e .` 本地源码 editable 安装
 5. 验证 pandaone 可用（`python -m pandaone --version`）
 6. 调用 `doctor.py --fix --persist-path` 自动修复剩余问题（依赖、setuptools、指纹、PATH 持久化到 HKCU）
+7. 注册 MCP server 到检测到的 IDE 配置（Claude Desktop / Cursor / Trae），写前备份、只合并不覆盖；加 `--skip-mcp` 可跳过
 
 #### 30 秒上手（第一次用请先看这里）/ 30-Second Start
 
@@ -389,7 +406,24 @@ pip install pandaone-guard
 | `pandaone serve` | **🆕 Web 实时仪表盘**（浏览器打开 `localhost:8765`,watchdog + SSE <100ms 推送）|
 | `pandaone install-git` | 自动安装 git |
 | `pandaone ci` | L7 CI 验证（git diff vs audit log）|
+| `pandaone setup` | **🆕 一键本地部署**（Python/git 检查 → PATH 持久化 → git 仓库 + baseline commit → init → 看门狗 → 右键菜单 → 仪表盘 → doctor 体检；不设 remote、不推送）|
+| `pandaone upgrade` | **🆕 一键升级**（pip 升级 → 指纹自动刷新 → 重启看门狗 / 仪表盘 → 打印版本对比）|
+| `pandaone backup` | **🆕 纯本地备份**（`--output x.bundle` 生成 git bundle；`--mirror DIR` 建本地裸仓库镜像；**不碰远程**）|
+| `pandaone install-mcp` | **🆕 注册 MCP server**（探测 Claude Desktop / Cursor / Trae / Windsurf；写前备份、只合并不覆盖、装后回读自检）|
+| `pandaone init --with-git` | 初始化时一并建 git 仓库并提交 baseline commit |
 | `pandaone-mcp` | 启动 MCP server（stdio JSON-RPC） |
+
+#### 🆕 指纹密码（默认 `0000`，可以改成你自己的）
+
+L5 自校验（防止 agent 改了 pandaone 本体来绕过审计）用的密码，**默认值保持 `0000`**（本地单用户零摩擦），但你可以随时改：
+
+```bash
+pandaone --set-fingerprint-password mysecret   # 设成自己的密码（≥4 位）
+pandaone --reset-fingerprint-password           # 删掉自设密码，回落到默认 0000
+pandaone --reset-fingerprint-lock               # 连续输错被锁了？解锁
+```
+
+优先级：`PANDAONE_FP_PASSWORD` 环境变量 > `~/.pandaone/fp_password` 文件 > 默认 `0000`。密码比较走 `hmac.compare_digest`（常量时间，防时序侧信道），连续输错 5 次锁 15 分钟。
 
 ### 开发与测试 / Development & Testing
 
@@ -462,6 +496,22 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 ./scripts/install.sh
 ```
 
+**Option C: Windows one-click installer (recommended for Windows users)**
+
+Grab `PandaoneSetup-<version>-x64.exe` from GitHub Releases and double-click it. **No administrator rights required** (installs into `%LOCALAPPDATA%\Pandaone`), and it automatically:
+
+- installs `pandaone.exe` / `pandaone_guard.exe` / `pandaone-mcp.exe`
+- adds them to the user PATH (HKCU — no admin needed)
+- installs the Windows right-click menu (files / folders / background, cascading Init / Lock / Status / Unlock)
+- optionally registers the MCP server into Claude Desktop / Cursor / Trae
+
+Then:
+
+```bash
+pandaone setup      # one-click local deployment (git + repo + audit + watchdog + context menu + dashboard)
+pandaone doctor     # environment check
+```
+
 **The install script automatically**:
 1. Checks Python >= 3.10
 2. Locates git (scans common install paths if not in PATH)
@@ -469,6 +519,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 4. `pip install -e .` local source editable install
 5. Verifies pandaone works (`python -m pandaone --version`)
 6. Runs `doctor.py --fix --persist-path` (auto-fix remaining issues: deps / setuptools / fingerprint / persist PATH to HKCU)
+7. Registers the MCP server into detected IDE configs (Claude Desktop / Cursor / Trae) — backs up first, merges without overwriting; pass `--skip-mcp` to opt out
 
 ### 30-Second Start (start here if you're new)
 

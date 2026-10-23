@@ -39,7 +39,8 @@ param(
     [string]$WheelPath = "",
     [switch]$Force,
     [switch]$SkipContext,
-    [switch]$SkipHook
+    [switch]$SkipHook,
+    [switch]$SkipMcp
 )
 
 $ErrorActionPreference = "Stop"
@@ -314,7 +315,25 @@ if (-not $SkipHook -and $gitAvailable) {
     Write-Host "[SKIP] git hook (per -SkipHook)" -ForegroundColor DarkGray
 }
 
-# ---- 10. 提示下一步 ----
+# ---- 10. 注册 MCP server（可用 -SkipMcp 跳过）----
+if (-not $SkipMcp) {
+    Write-Host "[9/10] 注册 MCP server 到 IDE 配置（Claude Desktop / Cursor / Trae）..." -ForegroundColor Cyan
+    $pandaoneExe = Join-Path $venvScripts "pandaone.exe"
+    if (Test-Path $pandaoneExe) {
+        & $pandaoneExe install-mcp --client auto
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[OK] MCP server 注册完成" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] MCP 注册失败，可稍后手动执行: pandaone install-mcp" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "[WARN] 找不到 $pandaoneExe，跳过 MCP 注册" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[SKIP] MCP 注册 (per -SkipMcp)" -ForegroundColor DarkGray
+}
+
+# ---- 11. 提示下一步 ----
 Write-Host ""
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host " Installation complete!" -ForegroundColor Green
@@ -328,6 +347,7 @@ Write-Host "下一步 / Next steps (新开 cmd/PowerShell):" -ForegroundColor Cy
 Write-Host "  pandaone doctor              # 环境检查"
 Write-Host "  pandaone install-context     # 安装 Windows 右键菜单"
 Write-Host "  pandaone install-hook        # 安装 git pre-commit hook"
+Write-Host "  pandaone install-mcp         # 注册 MCP server 到 IDE (Claude/Cursor/Trae)"
 Write-Host "  pandaone --help              # 全部命令"
 Write-Host ""
 Write-Host "升级 / Upgrade:" -ForegroundColor Cyan

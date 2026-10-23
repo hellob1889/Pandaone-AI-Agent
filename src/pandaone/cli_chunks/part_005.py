@@ -52,13 +52,44 @@ def cmd_install_git(args):
     else:
         cands = []
     for cand in cands:
-        if Path(cand, "git.exe").exists():
-            print(t("git_probe_found", path=cand))
-            return 0
+        git_exe = Path(cand, "git.exe")
+        if not git_exe.exists():
+            continue
+        # v0.7.22 P1-1 fix: 候选目录命中后再用 _can_run_git() 验证真能执行 ——
+        # 0 字节占位文件 / 被杀软隔离的 git.exe 之前会被误判成"已安装",
+        # 然后 L2/L3 静默失效, 用户以为防护装好了其实没有。
+        try:
+            from pandaone.git_installer import _can_run_git
+            if not _can_run_git(str(git_exe)):
+                continue
+        except ImportError:
+            pass
+        print(t("git_probe_found", path=str(git_exe)))
+        return 0
     print(t("git_not_installed"))
+    # v0.7.22 P1-1 fix: 接上 git_installer —— 之前 cmd_install_git 只探测不安装,
+    # 自己写的 _install_windows()(winget → choco) 是死代码, 跑 install-git 永远装不上。
+    # 同时让 --probe-only 真正生效(之前注册了这个参数却从没被读过)。
+    if getattr(args, "probe_only", False):
+        return 1
     if getattr(args, "auto_download", False):
         return _download_portable_git()
-    return 1
+    try:
+        from pandaone.git_installer import install as _git_install, GitInstallError
+    except ImportError:
+        return 1
+    try:
+        result = _git_install()
+    except GitInstallError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        try:
+            from pandaone.git_installer import get_install_hint
+            print(get_install_hint())
+        except ImportError:
+            pass
+        return 1
+    print(t("git_installed", path=result.path))
+    return 0
 
 
 def _download_portable_git():
@@ -120,10 +151,33 @@ def cmd_watch(args):
             cmd = [sys.executable, "-m", "pandaone_guard", "--root", str(root), "--daemon"]
         p = subprocess.Popen(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"}, **kwargs)
         pid_path = pandaone_dir / ".watchdog_pid"
-        for _ in range(20):
+        # v0.7.22 P1-4 fix: 之前 Popen 完不看进程活没活, 无条件 print "已在后台启动"
+        # 并 return 0 —— 用户实测遇到过"报告启动成功但查不到进程"。
+        # 现在: 子进程提前退出, 或等待后 pid 文件仍未生成, 都算失败并明确报错。
+        for _ in range(50):          # 最多等 5s 给子进程写 pid 文件
             if pid_path.exists():
                 break
+            if p.poll() is not None:  # 子进程已退出 → 启动失败
+                break
             time.sleep(0.1)
+        if p.poll() is not None:
+            print(t("watch_daemon_failed"), file=sys.stderr)
+            print(f"  exit code: {p.returncode}", file=sys.stderr)
+            log_file_path = pandaone_dir / "watchdog.log"
+            if log_file_path.exists():
+                try:
+                    tail = log_file_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()[-10:]
+                    for line in tail:
+                        print(f"  {line}", file=sys.stderr)
+                except Exception:
+                    pass
+            return 1
+        if not pid_path.exists():
+            print(t("watch_daemon_failed"), file=sys.stderr)
+            print(t("watch_daemon_no_pid"), file=sys.stderr)
+            return 1
         print(t("watch_daemon_started"))
         return 0
     sys.path.insert(0, str(ROOT))

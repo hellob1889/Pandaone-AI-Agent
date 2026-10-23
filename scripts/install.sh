@@ -48,12 +48,15 @@ fi
 # ============================================================
 SKIP_INSTALL=0
 SKIP_DOCTOR=0
+SKIP_MCP=0
 FORCE=0
 SHOW_HELP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-install) SKIP_INSTALL=1; shift ;;
         --skip-doctor)  SKIP_DOCTOR=1; shift ;;
+    --skip-mcp)     SKIP_MCP=1; shift ;;
+    --skip-mcp)     SKIP_MCP=1; shift ;;
         --force)        FORCE=1; shift ;;
         --help|-h)      SHOW_HELP=1; shift ;;
         *) echo "Unknown option: $1"; exit 2 ;;
@@ -262,7 +265,20 @@ echo -e "${C_INFO}==============================================================
 echo -e "${C_INFO} 安装完成 — 耗时: ${duration}s${C_RESET}"
 echo -e "${C_INFO}================================================================${C_RESET}"
 echo ""
+# ---- 注册 MCP server（可用 --skip-mcp 跳过）----
+if [[ "$SKIP_MCP" -eq 0 ]]; then
+    echo -e "${C_INFO}[MCP] 注册 MCP server 到 IDE 配置（Claude Desktop / Cursor / Trae）...${C_RESET}"
+    if python -m pandaone install-mcp --client auto; then
+        echo -e "${C_OK}  MCP 注册完成${C_RESET}"
+    else
+        echo -e "${C_WARN}MCP 注册失败，可手动执行: pandaone install-mcp${C_RESET}"
+    fi
+else
+    echo -e "${C_WARN}[SKIP] MCP 注册 (per --skip-mcp)${C_RESET}"
+fi
+
 echo -e "${C_WARN}下一步：${C_RESET}"
+echo "  pandaone install-mcp         # 注册 MCP server 到 IDE (Claude/Cursor/Trae)"
 echo "  python -m pandaone --version         # 验证 CLI"
 echo "  python scripts/doctor.py           # 详细诊断"
 echo "  python -m pytest tests/ -q        # 跑全部测试"

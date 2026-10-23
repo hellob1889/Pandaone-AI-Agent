@@ -63,8 +63,99 @@ TRANSLATIONS = {
         # v0.7.21.2 候选 #1: 指纹存版本号 + default auto-refresh
         "info_fp_auto_refreshed": "[INFO] Pandaone {old_version} → {new_version} 指纹已自动更新 ({hash}...)",
         "info_fp_migrated": "[INFO] 指纹格式已迁移 v1 (裸 hex) → v2 (json+version)",
+        "info_fp_form_refreshed": "[INFO] 运行形态切换 ({old_form} → {new_form})，指纹已自动更新 ({hash}...)",
         "err_fp_strict_mismatch": "[ERROR] 严格模式下指纹不匹配: 存储 ({old_hash}...) ≠ 当前 ({new_hash}...)，疑似篡改",
         "info_fp_version_change": "Pandaone {old_version} → {new_version} 指纹自动更新",
+        # v0.7.22: watchdog 启动后没等到 pid 文件
+        "watch_daemon_no_pid": "  watchdog pid 文件未生成",
+        # v0.7.23: 指纹密码可自定义（默认 0000 保留）+ 常量时间比较 + 失败锁定
+        "err_fp_locked": "[ERROR] 指纹密码连续输错已锁定，请在 {seconds} 秒后重试（或用 --reset-fingerprint-lock 解除）",
+        "err_fp_locked_now": "[ERROR] 连续输错已达上限，锁定 {seconds} 秒",
+        "err_fp_password_empty": "[ERROR] 密码不能为空",
+        "err_fp_password_too_short": "[ERROR] 密码太短，至少 {min_len} 位",
+        "ok_fp_password_set": "[OK] 指纹密码已设置，保存于: {path}",
+        "ok_fp_password_reset": "[OK] 已清除自定义指纹密码，回落到默认 0000",
+        "ok_fp_lock_reset": "[OK] 指纹密码失败锁定已解除",
+
+        # ============ v0.7.23: setup（建议 1.1）============
+        "setup_header": "===== Pandaone 本地部署 ({root}) =====",
+        "setup_step": "[{n}/{total}] {name}",
+        "setup_python_ok": "Python {ver} (>= {min})",
+        "setup_python_old": "需要 Python >= {min}，当前 {ver}",
+        "setup_git_ok": "git {ver} ({path})",
+        "setup_git_installed": "已安装 git {ver} ({path})，如未生效请重开终端",
+        "setup_git_missing": "未检测到 git（L2/L3 回滚与 hook 将不可用）",
+        "setup_git_failed": "git 相关操作失败: {err}",
+        "setup_init": "Pandaone 初始化完成: {path}",
+        "setup_watch_ok": "看门狗已在后台启动 (PID {pid})",
+        "setup_watch_fail": "看门狗启动失败: {err}",
+        "setup_context_ok": "右键菜单已注册",
+        "setup_context_fail": "右键菜单注册失败: {err}",
+        "setup_context_skip_platform": "非 Windows 平台，跳过右键菜单注册",
+        "setup_serve": "仪表盘: {url}",
+        "setup_serve_fail": "仪表盘启动失败: {err}",
+        "setup_doctor": "体检完成 (exit={rc})",
+        "setup_summary": "部署摘要:",
+        "setup_done": "本地部署完成。所有环节均在本地完成，未设置任何远程仓库。",
+
+        # ============ v0.7.23: init --with-git（建议 1.2）============
+        "init_with_git_done": "[OK] git 仓库就绪: {msg}",
+        "init_with_git_fail": "[WARN] git 初始化失败: {err}",
+
+        # ============ v0.7.23: upgrade（建议 1.3）============
+        "upgrade_header": "===== 升级 {package} =====",
+        "upgrade_current": "当前版本: {version}",
+        "upgrade_latest": "PyPI 最新版本: {version}",
+        "upgrade_latest_unknown": "无法查询 PyPI 最新版本（离线？）",
+        "upgrade_already_latest": "已经是最新版本",
+        "upgrade_check_only": "仅检查模式，未执行升级",
+        "upgrade_pip_running": "正在通过 pip 升级...",
+        "upgrade_pip_ok": "pip 升级完成",
+        "upgrade_pip_fail": "pip 升级失败: {err}",
+        "upgrade_fp_note": "提示: 版本号已变更，下次运行时会自动刷新自校验指纹，无需手工 --update-fingerprint。",
+        "upgrade_version_compare": "版本: {before} → {after}",
+        "upgrade_version_changed": "版本已更新",
+        "upgrade_version_same": "版本未变化",
+        "upgrade_watch_not_running": "看门狗未在运行，跳过",
+        "upgrade_watch_stopped": "已停止看门狗 (PID {pid})",
+        "upgrade_watch_stop_fail": "停止看门狗失败 (PID {pid})",
+        "upgrade_watch_started": "看门狗已重新启动",
+        "upgrade_watch_start_fail": "看门狗启动失败: {err}",
+        "upgrade_serve_ok": "仪表盘: {url}",
+        "upgrade_serve_fail": "仪表盘重启失败: {err}",
+        "upgrade_done": "升级完成。",
+
+        # ============ v0.7.23: backup（建议 1.4，纯本地）============
+        "backup_header": "===== 本地备份 ({root}) =====",
+        "backup_fail": "备份失败: {err}",
+        "backup_not_repo": "{root} 不是 git 仓库，无法备份",
+        "backup_repo_info": "仓库: HEAD={head} 提交数={commits} 远程={remotes}",
+        "backup_no_remote": "（无，纯本地）",
+        "backup_status_only": "仅显示状态，未执行备份",
+        "backup_bundle_ok": "bundle 已生成: {path} ({size})",
+        "backup_bundle_fail": "bundle 生成失败: {err}",
+        "backup_mirror_ok": "本地镜像已创建: {path}",
+        "backup_mirror_fail": "本地镜像创建失败: {err}",
+        "backup_nothing": "没有生成任何备份",
+        "backup_done": "共生成 {n} 个备份产物",
+        "backup_local_only": "提示: 以上均为**纯本地**产物，不涉及任何远程仓库。",
+        "backup_restore_hint": "恢复方式: git clone <bundle 文件> <目标目录>（推荐，跨平台可用）；镜像目录: git clone --local <镜像目录> <目标目录>",
+
+        # ============ v0.7.23: install-mcp ============
+        "mcp_header": "===== 注册 MCP 服务器 ({command}) =====",
+        "mcp_command_fallback": "PATH 中找不到 pandaone-mcp，已改用绝对路径",
+        "mcp_no_client_found": "未检测到已存在的 IDE 配置文件，可选客户端与路径如下:",
+        "mcp_target": "[{client}] {path}",
+        "mcp_backup_ok": "已备份原配置: {path}",
+        "mcp_already_ok": "[{client}] 已经是正确配置，无需改动",
+        "mcp_installed": "[{client}] 已注册: {path}",
+        "mcp_others_kept": "  已保留其他 {n} 个 MCP server",
+        "mcp_write_fail": "写入失败: {err}",
+        "mcp_verify_ok": "自检通过: {path}",
+        "mcp_verify_fail": "自检失败（配置未生效）: {path}",
+        "mcp_verify_cmd_mismatch": "自检失败：command 不匹配（当前 {got}）",
+        "mcp_dry_run_done": "dry-run 结束，未写入任何文件",
+        "mcp_restart_hint": "提示: 请重启 IDE / AI 客户端以加载新的 MCP 配置。",
 
         # ============ init ============
         "ok_initialized": "[OK] 已初始化: {path}",
@@ -164,7 +255,7 @@ TRANSLATIONS = {
         "warn_chmod_restore_failed": "[WARN] 写后恢复文件锁定失败 {file}: {err} — 文件可能仍可写",
         "write_reject_chmod_restore_failed": "无法恢复文件锁定状态: {err}",
         # Bug #11 fix: 移除 cli.py 硬编码中文
-        "err_readme_missing": "[ERROR] README.md 未找到，CLI 无法运行",
+        "err_readme_missing": "[ERROR] README.md 未找到（不影响 CLI 使用）",
         # Bug #12 fix: 移除 cli.py 硬编码英文
         "warn_icon_toggle_failed": "[WARN] icon toggle failed (lock/unlock still ok): {err}",
         # Bug #10 fix: 移除 cli.py 硬编码中文
@@ -361,6 +452,8 @@ TRANSLATIONS = {
         "watch_stop_win": "  停止: taskkill /F /PID {pid}  (Windows)",
         "watch_stop_unix": "  停止: kill {pid}  (Unix/macOS)",
         "_watch_no_init": "{root} 未初始化 Pandaone 项目",
+        # v0.7.22: watchdog 启动失败时的明确报错（之前无条件报"已在后台启动"）
+        "watch_daemon_failed": "[ERROR] 看门狗启动失败",
 
         # ============ ci ============
         "ci_header": "Pandaone CI 验证 — {root}",
@@ -455,8 +548,99 @@ TRANSLATIONS = {
         # v0.7.21.2 candidate #1: store fingerprint with version, default auto-refresh
         "info_fp_auto_refreshed": "[INFO] Pandaone {old_version} → {new_version} fingerprint auto-refreshed ({hash}...)",
         "info_fp_migrated": "[INFO] Fingerprint format migrated v1 (raw hex) → v2 (json+version)",
+        "info_fp_form_refreshed": "[INFO] Build form switched ({old_form} → {new_form}), fingerprint auto-refreshed ({hash}...)",
         "err_fp_strict_mismatch": "[ERROR] Strict mode fingerprint mismatch: stored ({old_hash}...) ≠ current ({new_hash}...); possible tamper",
         "info_fp_version_change": "Pandaone {old_version} → {new_version} fingerprint auto-refreshed",
+        # v0.7.22: watchdog started but pid file never appeared
+        "watch_daemon_no_pid": "  watchdog pid file was not created",
+        # v0.7.23: customizable fingerprint password (default 0000 kept) + constant-time compare + failure lockout
+        "err_fp_locked": "[ERROR] Too many wrong fingerprint passwords, locked. Retry in {seconds}s (or use --reset-fingerprint-lock)",
+        "err_fp_locked_now": "[ERROR] Too many wrong passwords, locked for {seconds}s",
+        "err_fp_password_empty": "[ERROR] Password must not be empty",
+        "err_fp_password_too_short": "[ERROR] Password too short, at least {min_len} characters",
+        "ok_fp_password_set": "[OK] Fingerprint password set, saved at: {path}",
+        "ok_fp_password_reset": "[OK] Custom fingerprint password cleared, back to default 0000",
+        "ok_fp_lock_reset": "[OK] Fingerprint password lockout cleared",
+
+        # ============ v0.7.23: setup ============
+        "setup_header": "===== Pandaone local setup ({root}) =====",
+        "setup_step": "[{n}/{total}] {name}",
+        "setup_python_ok": "Python {ver} (>= {min})",
+        "setup_python_old": "Python >= {min} required, current {ver}",
+        "setup_git_ok": "git {ver} ({path})",
+        "setup_git_installed": "git {ver} installed ({path}); reopen the terminal if not picked up",
+        "setup_git_missing": "git not found (L2/L3 rollback and hooks unavailable)",
+        "setup_git_failed": "git operation failed: {err}",
+        "setup_init": "Pandaone initialized: {path}",
+        "setup_watch_ok": "watchdog started in background (PID {pid})",
+        "setup_watch_fail": "failed to start watchdog: {err}",
+        "setup_context_ok": "context menu registered",
+        "setup_context_fail": "failed to register context menu: {err}",
+        "setup_context_skip_platform": "not Windows, skipping context menu",
+        "setup_serve": "Dashboard: {url}",
+        "setup_serve_fail": "failed to start dashboard: {err}",
+        "setup_doctor": "health check done (exit={rc})",
+        "setup_summary": "Setup summary:",
+        "setup_done": "Local setup complete. Everything ran locally; no remote repository was configured.",
+
+        # ============ v0.7.23: init --with-git ============
+        "init_with_git_done": "[OK] git repository ready: {msg}",
+        "init_with_git_fail": "[WARN] git initialization failed: {err}",
+
+        # ============ v0.7.23: upgrade ============
+        "upgrade_header": "===== Upgrading {package} =====",
+        "upgrade_current": "Current version: {version}",
+        "upgrade_latest": "Latest on PyPI: {version}",
+        "upgrade_latest_unknown": "Could not query PyPI for the latest version (offline?)",
+        "upgrade_already_latest": "Already up to date",
+        "upgrade_check_only": "Check-only mode, nothing upgraded",
+        "upgrade_pip_running": "Upgrading via pip...",
+        "upgrade_pip_ok": "pip upgrade finished",
+        "upgrade_pip_fail": "pip upgrade failed: {err}",
+        "upgrade_fp_note": "Note: the version changed, so the self-check fingerprint refreshes automatically on next run — no manual --update-fingerprint needed.",
+        "upgrade_version_compare": "Version: {before} → {after}",
+        "upgrade_version_changed": "Version updated",
+        "upgrade_version_same": "Version unchanged",
+        "upgrade_watch_not_running": "watchdog not running, skipping",
+        "upgrade_watch_stopped": "stopped watchdog (PID {pid})",
+        "upgrade_watch_stop_fail": "failed to stop watchdog (PID {pid})",
+        "upgrade_watch_started": "watchdog restarted",
+        "upgrade_watch_start_fail": "failed to start watchdog: {err}",
+        "upgrade_serve_ok": "Dashboard: {url}",
+        "upgrade_serve_fail": "failed to restart dashboard: {err}",
+        "upgrade_done": "Upgrade complete.",
+
+        # ============ v0.7.23: backup (local only) ============
+        "backup_header": "===== Local backup ({root}) =====",
+        "backup_fail": "Backup failed: {err}",
+        "backup_not_repo": "{root} is not a git repository, cannot back up",
+        "backup_repo_info": "Repo: HEAD={head} commits={commits} remotes={remotes}",
+        "backup_no_remote": "(none, local only)",
+        "backup_status_only": "Status only, no backup performed",
+        "backup_bundle_ok": "bundle created: {path} ({size})",
+        "backup_bundle_fail": "bundle creation failed: {err}",
+        "backup_mirror_ok": "local mirror created: {path}",
+        "backup_mirror_fail": "local mirror creation failed: {err}",
+        "backup_nothing": "No backup artifact was produced",
+        "backup_done": "{n} backup artifact(s) produced",
+        "backup_local_only": "Note: all of the above are **local only** artifacts; no remote repository is involved.",
+        "backup_restore_hint": "Restore with: git clone <bundle> <dir> (recommended, works everywhere); for the mirror: git clone --local <mirror> <dir>",
+
+        # ============ v0.7.23: install-mcp ============
+        "mcp_header": "===== Registering MCP server ({command}) =====",
+        "mcp_command_fallback": "pandaone-mcp not found in PATH, falling back to an absolute path",
+        "mcp_no_client_found": "No existing IDE config found. Available clients and paths:",
+        "mcp_target": "[{client}] {path}",
+        "mcp_backup_ok": "backed up existing config: {path}",
+        "mcp_already_ok": "[{client}] already correct, nothing changed",
+        "mcp_installed": "[{client}] registered: {path}",
+        "mcp_others_kept": "  kept {n} other MCP server(s)",
+        "mcp_write_fail": "write failed: {err}",
+        "mcp_verify_ok": "self-check passed: {path}",
+        "mcp_verify_fail": "self-check failed (config not effective): {path}",
+        "mcp_verify_cmd_mismatch": "self-check failed: command mismatch (current {got})",
+        "mcp_dry_run_done": "dry-run finished, nothing written",
+        "mcp_restart_hint": "Note: restart your IDE / AI client to pick up the new MCP configuration.",
 
         # ============ init ============
         "ok_initialized": "[OK] Initialized: {path}",
@@ -538,7 +722,7 @@ TRANSLATIONS = {
         # Bug #29 fix: init existing config warning
         "warn_init_config_exists": "[WARN] Detected existing config.json ({path}), preserving your customizations",
         # Bug #11 fix: replace hardcoded Chinese with i18n
-        "err_readme_missing": "[ERROR] README.md not found, CLI cannot run",
+        "err_readme_missing": "[ERROR] README.md not found (does not affect CLI usage)",
         # Bug #12 fix: replace hardcoded English with i18n
         "warn_icon_toggle_failed": "[WARN] icon toggle failed (lock/unlock still ok): {err}",
         # Bug #10 fix: replace hardcoded Chinese with i18n
@@ -752,6 +936,8 @@ TRANSLATIONS = {
         "watch_stop_win": "  Stop: taskkill /F /PID {pid}  (Windows)",
         "watch_stop_unix": "  Stop: kill {pid}  (Unix/macOS)",
         "_watch_no_init": "{root} not initialized as Pandaone project",
+        # v0.7.22: explicit failure message (previously always claimed success)
+        "watch_daemon_failed": "[ERROR] watchdog failed to start",
 
         # ============ ci ============
         "ci_header": "Pandaone CI Verification — {root}",

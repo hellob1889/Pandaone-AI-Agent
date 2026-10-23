@@ -51,9 +51,11 @@ Thumbs.db
 *.tmp
 *.bak
 
-# Installer（保留 .iss 脚本，忽略 staging 目录）
+# Installer（.iss 模板真源在 src/pandaone/installer/codeaudit.iss，入库；
+# 这里的 installer/pandaone.iss 是 build_pyinstaller.py 渲染出的构建产物，忽略以免两份分叉）
 installer/staging/
 installer/Output/
+installer/pandaone.iss
 
 # Release artifacts(用户级输出,不入仓库 — 重新打包请跑 scripts/release.py)
 Pandaone-*-install.zip

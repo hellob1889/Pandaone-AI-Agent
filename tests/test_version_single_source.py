@@ -85,10 +85,13 @@ class TestVersionSingleSource:
         src = str(REPO_ROOT / "src")
         if src not in sys.path:
             sys.path.insert(0, src)
-        # 强制重载,避免 pytest 缓存
-        if "pandaone" in sys.modules:
-            del sys.modules["pandaone"]
+        # v0.7.22 fix: 原来 del sys.modules["pandaone"] 再 import，
+        #   会造出**新的模块对象**，让其他模块持有的旧引用失效
+        #   （后续测试的 patch("pandaone.xxx") 会打到新对象上，mock 静默失效）。
+        #   改用 importlib.reload：复用同一模块对象、重新执行 __init__.py。
+        import importlib
         import pandaone
+        importlib.reload(pandaone)
 
         # 如果当前进程的 import 是从 site-packages 来的,直接比较
         # 如果是开发模式 (src/),则忽略 import 的版本,以 METADATA 为准
@@ -115,12 +118,11 @@ class TestVersionSingleSource:
         with mock.patch.object(
             im, "version", side_effect=im.PackageNotFoundError("pandaone-guard")
         ) as metadata_version:
-            # 强制 reload pandaone.__init__
-            if "pandaone" in sys.modules:
-                del sys.modules["pandaone"]
-            if "pandaone.cli" in sys.modules:
-                del sys.modules["pandaone.cli"]
+            # v0.7.22 fix: 改用 importlib.reload 而非 del sys.modules + import，
+            #   避免制造模块对象分裂（详见上方注释）。
+            import importlib
             import pandaone
+            importlib.reload(pandaone)
 
             metadata_version.assert_called_once_with("pandaone-guard")
             assert pandaone.__version__ == _read_pyproject_version(), (

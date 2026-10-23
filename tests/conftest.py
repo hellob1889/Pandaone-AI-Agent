@@ -20,9 +20,30 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+# ============================================================
+# v0.7.22: src/ 必须**最先**进 sys.path。
+#
+# 原来这段注入排在文件第 62 行，位置太靠后：上面第 30 行的
+# `from pandaone.git_installer import ...` 已经把 pandaone 包导进
+# sys.modules，之后 `from pandaone import cli` 拿到的就是 site-packages
+# 里已安装的旧副本，不是工作区源码。
+# 后果：改完源码跑测试，测的却不是改的东西 —— 测试全绿也说明不了问题。
+# （也解释了 report 里 test_installed_metadata_consistency 被静默跳过：
+#  它比较的就是 site-packages，而那里没有 pandaone-guard 的元数据。）
+#
+# 所以注入必须排在任何 pandaone 导入之前。
+# ============================================================
+ROOT_DIR = Path(__file__).resolve().parent.parent
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+# PYTHONPATH 让 subprocess 继承（开发模式下 `python -m pandaone_guard` 能找到）
+os.environ["PYTHONPATH"] = str(SRC_DIR) + os.pathsep + os.environ.get("PYTHONPATH", "")
 
 # 常见 git 安装位置（Windows）— 单一来源 = pandaone.git_installer._windows_candidate_dirs
 # 兼容 pandaone 还没完全 import 的早期阶段（pytest 收集阶段），用 try/except 兜底
@@ -59,14 +80,8 @@ def _find_git_dir() -> str | None:
     return None
 
 
-# 把 src/ 加到 sys.path 和 PYTHONPATH（让 subprocess 启动的 python 也能找到 package）
-import sys
-ROOT_DIR = Path(__file__).resolve().parent.parent
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-# PYTHONPATH 让 subprocess 继承（开发模式下 `python -m pandaone_guard` 能找到）
-os.environ["PYTHONPATH"] = str(SRC_DIR) + os.pathsep + os.environ.get("PYTHONPATH", "")
+# 把 src/ 加到 sys.path 和 PYTHONPATH 的逻辑已上移到文件顶部（见上方 v0.7.22 说明），
+# 必须在任何 `import pandaone` 之前完成。
 
 
 # 模块导入时立即把 git 加入 PATH

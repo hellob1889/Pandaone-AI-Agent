@@ -52,16 +52,16 @@ def test_v0721_3_update_fingerprint_writes_json_format(tmp_path):
     assert "version" in data, f"missing 'version' in {list(data.keys())}"
     assert "hash" in data, f"missing 'hash' in {list(data.keys())}"
     assert "stored_at" in data, f"missing 'stored_at' in {list(data.keys())}"
-    # version 应是当前装版 (pandaone-guard 安装的 wheel version)
-    from importlib.metadata import version as _v, PackageNotFoundError as _PNFE
-    try:
-        actual_version = _v("pandaone-guard")
-    except _PNFE:
-        actual_version = None
-    if actual_version:
-        assert data["version"] == actual_version, (
-            f"FP_PATH version {data['version']} != installed {actual_version}"
-        )
+    # v0.7.22: version 必须是**当前运行的这份代码**的版本。
+    #   源码树模式 = 源码 pyproject.toml 的版本（v0.7.22 起源码树优先），
+    #   已安装模式 = 包元数据的版本。
+    #   真正的不变式是 "FP_PATH 里的 version == 运行中的版本"，
+    #   而不是 "== 已安装版本" —— 后者在开发模式下本来就是错的：
+    #   源码已经改成 0.7.22.0 但装的还是 0.7.21.3 时，两者本就不该相等。
+    from pandaone import __version__ as running_version
+    assert data["version"] == running_version, (
+        f"FP_PATH version {data['version']} != running version {running_version}"
+    )
     # hash 应是 64 字符 hex
     assert len(data["hash"]) == 64 and all(c in "0123456789abcdef" for c in data["hash"]), (
         f"hash 不是 64 字符 hex: {data['hash']}"

@@ -110,7 +110,12 @@ def load_readme_summary():
       所以"已完成"是从阶段段落里提取，不是从"实施步骤记录"段落里。
     """
     if not README_PATH.exists():
-        return ["[ERROR] README.md 未找到，CLI 无法运行"]
+        # v0.7.22 P2-1 + P2-4 fix:
+        #   P2-1 之前这里写死 "CLI 无法运行", 但调用方只是把它当普通行 print 掉,
+        #         命令照常执行并正常退出 —— 文案与行为直接矛盾, 误导用户。
+        #   P2-4 之前是硬编码中文字符串, 英文用户永远看到中文; i18n 里的
+        #         err_readme_missing 中英各有一份却从未被调用。现在统一走 i18n。
+        return [t("err_readme_missing")]
 
     text = README_PATH.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -201,7 +206,15 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="store_true", help="显示版本")
-    parser.add_argument("--update-fingerprint", metavar="PASSWORD", help="更新 pandaone 自身 SHA256 指纹（默认密码 0000）")
+    parser.add_argument("--update-fingerprint", metavar="PASSWORD",
+                        help="更新 pandaone 自身 SHA256 指纹（默认密码 0000，可用 --set-fingerprint-password 自定义）")
+    # v0.7.23: 指纹密码可自定义（默认值 0000 保留）
+    parser.add_argument("--set-fingerprint-password", metavar="NEWPASSWORD",
+                        help="设置自指纹更新密码（默认仍是 0000；自定义后存于 ~/.pandaone/fp_password）")
+    parser.add_argument("--reset-fingerprint-password", action="store_true",
+                        help="清除自定义指纹密码，回落到默认 0000")
+    parser.add_argument("--reset-fingerprint-lock", action="store_true",
+                        help="解除指纹密码的失败锁定（连续输错触发）")
     # Phase 9+: 无声 + 默认信任（右键场景一键到底）
     parser.add_argument("--silent", action="store_true",
                         help="静默模式：跳过 banner 和 README 摘要（右键菜单调用建议带上）")

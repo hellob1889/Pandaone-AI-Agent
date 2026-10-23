@@ -70,10 +70,13 @@ def _check_layer5_self_fingerprint() -> dict:
 
 def _check_layer6_tamper_detection() -> dict:
     """v0.7.19: 真查 .pandaone/pandaone.jsonl audit log 状态 (替代 L6 字面量 'OK')"""
-    # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
-    # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
-    repo_root = _Path(__file__).resolve().parent.parent.parent
-    audit_log = repo_root / '.pandaone' / 'pandaone.jsonl'
+    # v0.7.24: 审计日志是**项目级**的，应该在当前工作目录找，而不是包的安装目录。
+    #   打包成 .exe 之后包目录里根本没有 .pandaone/，只查包目录永远显示 "clean state"，
+    #   会把"项目里的审计日志存在大量 REJECTED"这种真实信号掩盖掉。
+    candidates = [_Path.cwd() / '.pandaone' / 'pandaone.jsonl']
+    pkg_root = _Path(__file__).resolve().parent.parent.parent
+    candidates.append(pkg_root / '.pandaone' / 'pandaone.jsonl')
+    audit_log = next((c for c in candidates if c.exists()), candidates[0])
     if not audit_log.exists():
         return {"ok": True, "note": "no audit log yet (clean state)"}
     try:
@@ -90,6 +93,11 @@ def _check_layer6_tamper_detection() -> dict:
 
 def _check_layer7_ci_audit() -> dict:
     """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)"""
+    # v0.7.24: 打包成 .exe 之后没有 .github/workflows/audit.yml ——
+    # CI 配置属于源码仓库，不进安装包。这里报 N/A 而不是 FAIL，
+    # 否则 doctor 在打包态永远是红的，掩盖真正的问题。
+    if getattr(_sys, "_MEIPASS", None):
+        return {"ok": True, "note": "not applicable (packaged build; CI workflow lives in the source repo)"}
     # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
     # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
     repo_root = _Path(__file__).resolve().parent.parent.parent
@@ -204,7 +212,11 @@ def _collect_report():
         from pandaone import __version__ as pver
     except Exception:
         pver = "unknown"
-    pandaone_section = {"version": pver, "executable": _shutil.which("pandaone")}
+    # frozen (.exe): sys.executable 就是 pandaone.exe 本身。which("pandaone")
+    # 指向的是 PATH 里的另一份（比如 site-packages 装的），会误导用户以为在查那个。
+    _exe = (_sys.executable if getattr(_sys, "_MEIPASS", None)
+            else _shutil.which("pandaone"))
+    pandaone_section = {"version": pver, "executable": _exe}
 
     layers = {
         "L1_file_lock": {"ok": True, "note": "python-only (attrib/chmod)"},

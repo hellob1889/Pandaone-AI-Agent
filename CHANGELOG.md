@@ -2,6 +2,79 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.24.0] - 2026-10-24
+
+### Added: 一键部署 / 升级 / 备份 / MCP 注册（对应《建议书》产品建议 1.1–1.5 + 历史欠账项）
+
+| 命令 | 作用 |
+|---|---|
+| `pandaone setup` | 一键本地部署：Python ≥3.10 检查 → git 探测/引导安装 → PATH 持久化（HKCU，无需管理员）→ git 仓库 + **仓库级** user.name/email + baseline commit → `init` → 看门狗 → 右键菜单 → 仪表盘 → `doctor` 体检。**不设 remote、不推送**；单步失败不中断，最后汇总。 |
+| `pandaone upgrade` | pip 升级 → 指纹自动刷新 → 重启看门狗 → 重启仪表盘 → 打印版本对比。支持 `--check-only` / `--from-source` / `--no-restart`。 |
+| `pandaone backup` | **纯本地**备份：`--output x.bundle` 生成 git bundle（单文件、跨平台、零依赖可恢复）；`--mirror DIR` 建本地裸仓库镜像；`--status` 只读查看。**不集成 gh、不碰远程。** |
+| `pandaone install-mcp` | 探测 Claude Desktop / Cursor / Trae / Windsurf → 写前备份 → **只合并不覆盖**（已有 `mcpServers.pandaone` 保留）→ 装后回读自检 → 提示重启 IDE。支持 `--client auto\|claude\|cursor\|trae\|windsurf\|all` / `--dry-run`。 |
+| `pandaone init --with-git` | `init` 检测到当前目录不是 git 仓库时，可用 `--with-git` 一并建仓库并提交 baseline commit。 |
+
+四份安装脚本（`install.sh` / `install.ps1` / `scripts/install.sh` / `scripts/install.ps1`）末尾均已接入
+`pandaone install-mcp`，可用 `--skip-mcp` / `-SkipMcp` 跳过。
+
+### Added: Windows 一键安装包（.exe）
+
+- 新增 `build_pyinstaller.py`（重写）：适配当前 `src/` 布局，一次打出
+  `pandaone.exe` / `pandaone_guard.exe` / `pandaone-mcp.exe`，并调用 Inno Setup 编译出
+  **`PandaoneSetup-<版本>-x64.exe`**。
+- 安装包**免管理员权限**（装到 `%LOCALAPPDATA%\Pandaone`），自动加入用户 PATH（HKCU）、
+  安装级联右键菜单，并可选勾选注册 MCP server。
+- `src/pandaone/installer/codeaudit.iss` 同步修正：右键菜单改为与代码一致的
+  `ExtendedSubCommandsKey` 结构（旧的 `SubCommands` 在 HKCU 下 Explorer 静默不显示）、
+  去掉 `--trust-default`、修正 Inno Setup 6 不兼容指令、`OutputBaseFilename` 改为
+  `PandaoneSetup-<版本>-x64`、简体中文 `.isl` 不存在时自动退回英文向导。
+
+### Changed: L5 指纹覆盖面扩展到整个包目录
+
+指纹不再只覆盖 `.py`：`pandaone/` 与 `pandaone_guard/` 两个包目录下的**全部文件**
+（`templates/`、`installer/`、`index.html`、`banner.txt`、`*.ico` …）都纳入计算，
+排除 `__pycache__` / `*.pyc` / `.git` 等运行时产物。改名、增删、改内容都会改变指纹。
+
+### Changed: 指纹密码可自定义（默认值仍为 `0000`）
+
+- **默认密码保持 `0000`**（本地单用户零摩擦），用户可自行改密：
+  `pandaone --set-fingerprint-password <密码>`（≥4 位）、`--reset-fingerprint-password` 回落默认。
+- 优先级：`PANDAONE_FP_PASSWORD` 环境变量 > `~/.pandaone/fp_password` 文件 > 默认 `0000`
+  （`PANDAX_FP_PASSWORD` 作为废弃别名保留兼容）。
+- 密码比较改走 `hmac.compare_digest`（常量时间，防时序侧信道）；连续输错 5 次锁定 15 分钟，
+  `--reset-fingerprint-lock` 可解锁。
+
+### Fixed: 打包态（frozen .exe）的 5 处缺陷
+
+1. **版本号丢失**：frozen 下既无 `pyproject.toml` 也无安装元数据 → `pandaone --version`
+   显示 `0.0.0+unknown`。现由打包脚本注入 `_build_info.py`。
+2. **指纹锁死**：源码态与冻结态的文件集合不同，指纹必然不同，同版本号会被判成篡改 →
+   装完 .exe 第一次运行就全锁。现引入指纹"运行形态"（`source` / `frozen`），
+   形态切换按合法部署处理并自动刷新。
+3. **L7 误报**：frozen 下找不到 `.github/workflows/audit.yml` → 改为 N/A（CI 配置属于源码仓库）。
+4. **L6 查错目录**：审计日志是项目级的，改为一律先查当前工作目录。
+5. **子进程解码崩溃**：`taskkill` / `netstat` 在中文 Windows 输出 GBK，`text=True` 按 UTF-8
+   解码抛 `UnicodeDecodeError` → 统一 `encoding="utf-8", errors="replace"`。
+
+### Fixed: 右键菜单注册结构
+
+`SubCommands` 级联依赖 `HKLM\...\Explorer\CommandStore`（需管理员），HKCU 注册不进 →
+Explorer 静默隐藏整个级联菜单。改为 `ExtendedSubCommandsKey` + `<base>\Shell\<verb>\command`，
+真机复验：文件右键 26 个动词、目录右键 34 个动词，均可见 "Pandaone 审计工具 / Audit Tools"。
+
+### Fixed: `cmd_status` 的 L5 指纹误报
+
+旧实现拿裸文本与 hex 比对，v0.7.21.2 指纹 json 化之后**永久误报**。现统一走 `_load_fp()`。
+
+### Fixed: pytest 三连坑（开发期）
+
+`sys.path` 注入顺序、模块顶层 `del sys.modules` 造成模块对象分裂、subprocess 跑陈旧副本 ——
+详见 `docs/development.md`。
+
+### Test
+
+`494 passed, 9 skipped, 0 failed`（Python 3.11.9 / Windows 10）。
+
 ## [0.7.18] - 2026-10-07
 
 ### Changed: 完整测试套件前移到 PR 阶段（测试不再是个装饰品）

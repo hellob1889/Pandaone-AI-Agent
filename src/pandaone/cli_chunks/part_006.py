@@ -4,6 +4,28 @@
 # v0.7.21.3 hotfix: 顶部独立 import pathlib.Path (之前依赖 cli.py loader 共享
 #   part_001 注入 namespace; 单 import 不走 loader 报 NameError on Path).
 from pathlib import Path
+
+# v0.7.22 P0-1 fix: 提到模块级, 让 tests/ 能直接断言这些结构常量
+# (之前定义在 _windows_registry_install() 函数体内, 外部取不到, 没法测)。
+#
+# BASE_KEYS: 三个右键入口 (任意文件 / 目录 / 目录空白处) 的父键。
+BASE_KEYS = [
+    r"Software\Classes\*\shell\Pandaone",
+    r"Software\Classes\Directory\shell\Pandaone",
+    r"Software\Classes\Directory\Background\shell\Pandaone",
+]
+# ExtendedSubCommandsKey 的值相对 base_key 的父级 (shell 层) 解析,
+# 即 "Pandaone\Shell" → Software\Classes\<type>\shell\Pandaone\Shell
+CASCADE_SUBKEY_REL = r"Pandaone\Shell"
+# (注册表 verb 名, 显示名, 对应 pandaone 子命令)
+SUB_COMMANDS = [
+    ("Init",   "Pandaone Init (init)",   "init"),
+    ("Lock",   "Pandaone Lock (lock)",   "lock"),
+    ("Status", "Pandaone Status (status)", "status"),
+    ("Unlock", "Pandaone Unlock (unlock)", "unlock"),
+]
+
+
 def _find_installer_dir():
     """定位 installer/ 目录。"""
     return Path(__file__).resolve().parent / "installer"
@@ -99,45 +121,64 @@ def _windows_registry_install(action, force=False):
     completely bypassing PowerShell. Fixes 5 accumulated bugs (BOM / #Requires /
     [CmdletBinding()] / $ErrorActionPreference inside function body / PowerShell 7+
     expression-if syntax / parentheses in comments confusing parser).
-    Registry structure equivalent to the original PS1:
+    Registry structure (v0.7.22 P0-1 fix — 实测验证):
       HKCU\\Software\\Classes\\*\\shell\\Pandaone (right-click on any file)
-          \\shell\\Init\\shell\\open\\command  → pandaone init --root "%V"
-          \\shell\\Lock\\shell\\open\\command  → pandaone lock --root "%V"
-          \\shell\\Status\\shell\\open\\command → pandaone status --root "%V"
-          \\shell\\Unlock\\shell\\open\\command → pandaone unlock --root "%V"
+          MUIVerb                 = "Pandaone 审计工具 / Audit Tools"
+          ExtendedSubCommandsKey  = "Pandaone\\Shell"
+          \\Shell\\Init\\command   → pandaone init --root "%V"
+          \\Shell\\Lock\\command   → pandaone lock --root "%V"
+          \\Shell\\Status\\command → pandaone status --root "%V"
+          \\Shell\\Unlock\\command → pandaone unlock --root "%V"
       HKCU\\Software\\Classes\\Directory\\shell\\Pandaone (right-click on directory)
       HKCU\\Software\\Classes\\Directory\\Background\\shell\\Pandaone (right-click on background)
+
+    为什么是 ExtendedSubCommandsKey, 不是 SubCommands:
+      MS 文档 "How to Create Cascading Menus with the SubCommands Registry Entry"
+      要求自定义静态动词实现在
+        HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\CommandStore\\Shell\\<Verb>\\command
+      即 SubCommands 方案依赖 HKLM (要管理员权限), HKCU 用户级注册不进去,
+      Explorer 会静默隐藏整个级联菜单 (不报错、不写日志)。
+      ExtendedSubCommandsKey 指向 HKCU 内相对路径, 普通用户即可用。
+
+    实测 (Shell.Application 的 item.Verbs() 直接问 Explorer 到底有哪些动词):
+        SubCommands + shell\\<name>\\open\\command → 不显示  (v0.7.20 的修复方案, 实测无效)
+        SubCommands + shell\\<name>\\command       → 不显示
+        SubCommands=<相对路径> + 各种子项位置      → 不显示
+        ExtendedSubCommandsKey + <name>\\command    → 显示 ✅
+
+    不要再加 "open" 中间层:
+      "open" 是动词名 (系统默认动词就是 shell\\open\\command), 放在 verb 下面
+      会被当成子动词, Explorer 反而不认。verb 自己的命令就在 <verb>\\command。
     """
     import winreg
-
-    BASE_KEYS = [
-        r"Software\Classes\*\shell\Pandaone",
-        r"Software\Classes\Directory\shell\Pandaone",
-        r"Software\Classes\Directory\Background\shell\Pandaone",
-    ]
-    SUB_COMMANDS = [
-        ("Init",   "Pandaone Init (init)",   "init"),
-        ("Lock",   "Pandaone Lock (lock)",   "lock"),
-        ("Status", "Pandaone Status (status)", "status"),
-        ("Unlock", "Pandaone Unlock (unlock)", "unlock"),
-    ]
 
     try:
         if action == "uninstall":
             print(t("ctx_banner_uninstall"))
             for base in BASE_KEYS:
-                # 先删子命令，再删主菜单 (顺序避免权限问题)
+                # v0.7.22: 删当前结构 (<base>\Shell\<name>\command) + 全部历史遗留结构。
+                # 从深到浅删, 否则父键非空时 DeleteKey 会抛 OSError。
                 for name, _, _ in SUB_COMMANDS:
-                    sub_path = f"{base}\\shell\\{name}"
-                    # v0.7.20 P0-1 fix: 删 open\command 而不只是 command (Explorer 只认 open 层)
-                    for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                    for p in (
+                        f"{base}\\Shell\\{name}\\command",
+                        f"{base}\\Shell\\{name}",
+                        f"{base}\\shell\\{name}\\open\\command",
+                        f"{base}\\shell\\{name}\\open",
+                        f"{base}\\shell\\{name}\\command",
+                        f"{base}\\shell\\{name}",
+                    ):
                         try:
                             winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
-                        except FileNotFoundError:
+                        except (FileNotFoundError, OSError):
                             pass
+                for p in (f"{base}\\Shell", f"{base}\\shell"):
+                    try:
+                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                    except (FileNotFoundError, OSError):
+                        pass
                 try:
                     winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
-                except FileNotFoundError:
+                except (FileNotFoundError, OSError):
                     pass
             print(t("ctx_uninstall_done"))
             print(t("ctx_uninstall_restart_hint"))
@@ -166,15 +207,26 @@ def _windows_registry_install(action, force=False):
 
         # 清理旧条目 (幂等)
         # v0.7.21 hotfix: Win11 锁 base_key 也会抛 OSError (PermissionError 子类), 加 catch 跳过
+        # v0.7.22: 同时清 v0.7.20 及更早的历史结构, 避免遗留键干扰 Explorer 解析
         for base in BASE_KEYS:
             for name, _, _ in SUB_COMMANDS:
-                sub_path = f"{base}\\shell\\{name}"
-                # v0.7.20 P0-1 fix: 删 open\command 而不只是 command
-                for p in (sub_path + r"\open\command", sub_path + r"\open", sub_path):
+                for p in (
+                    f"{base}\\Shell\\{name}\\command",
+                    f"{base}\\Shell\\{name}",
+                    f"{base}\\shell\\{name}\\open\\command",
+                    f"{base}\\shell\\{name}\\open",
+                    f"{base}\\shell\\{name}\\command",
+                    f"{base}\\shell\\{name}",
+                ):
                     try:
                         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
                     except (FileNotFoundError, OSError):
                         pass
+            for p in (f"{base}\\Shell", f"{base}\\shell"):
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, p)
+                except (FileNotFoundError, OSError):
+                    pass
             try:
                 winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base)
             except (FileNotFoundError, OSError):
@@ -189,22 +241,27 @@ def _windows_registry_install(action, force=False):
         for base in BASE_KEYS:
             try:
                 # 主菜单 (cascade = submenu)
+                # v0.7.22 P0-1 fix: 改用 ExtendedSubCommandsKey。
+                #   SubCommands 方案依赖 HKLM 的 CommandStore (需管理员), HKCU 注册
+                #   不进去 → Explorer 静默隐藏整个菜单 (v0.7.20 的修复实测无效)。
+                #   MUIVerb 提供显示名; 不设 (Default) (MS 文档: CascadeMenu 的 Default 不应设置)。
                 with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base) as key:
-                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Pandaone")
                     winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, "Pandaone 审计工具 / Audit Tools")
                     winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_value)
-                    # v0.7.20 P0-1 fix: 写真实 SubCommands 列表 (之前写空字符串 Explorer 判 0 子菜单隐藏)
-                    winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ,
-                                      r"shell\Init;shell\Lock;shell\Status;shell\Unlock")
-                # 4 个 subcommands
+                    winreg.SetValueEx(key, "ExtendedSubCommandsKey", 0, winreg.REG_SZ, CASCADE_SUBKEY_REL)
+                    # 清掉历史遗留的 SubCommands (空串会让 Explorer 判 0 子菜单 → 隐藏)
+                    try:
+                        winreg.DeleteValue(key, "SubCommands")
+                    except (FileNotFoundError, OSError):
+                        pass
+                # 4 个 subcommands: <base>\Shell\<name>\command  (不加 open 中间层)
                 for name, label, action_cmd in SUB_COMMANDS:
-                    sub_path = f"{base}\\shell\\{name}"
+                    sub_path = f"{base}\\Shell\\{name}"
                     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, sub_path) as sub_key:
                         winreg.SetValueEx(sub_key, "", 0, winreg.REG_SZ, label)
                         winreg.SetValueEx(sub_key, "Icon", 0, winreg.REG_SZ, icon_value)
-                    # v0.7.20 P0-1 fix: Explorer 只认 \open\command 路径
                     # v0.7.20 P0-3 fix: 去掉 --trust-default, 避免右键菜单静默关 L5 自校验
-                    cmd_path = f"{sub_path}\\open\\command"
+                    cmd_path = f"{sub_path}\\command"
                     cmd_value = f'"{pandaone_exe}" --silent {action_cmd} --root "%V"'
                     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd_path) as cmd_key:
                         winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, cmd_value)
@@ -236,8 +293,21 @@ def _windows_registry_install(action, force=False):
         for base, status, _ in base_results:
             if status != "OK":
                 continue  # SKIP 跳过自检
+            # v0.7.22: 自检按新结构回读 —— 父键的 ExtendedSubCommandsKey +
+            # 每个 verb 的 <base>\Shell\<name>\command 必须真实可读,
+            # 否则不能打印 "安装完成" (v0.7.20 的自检查的是 open\command, 恒过, 形同虚设)
+            try:
+                _pk = winreg.OpenKey(winreg.HKEY_CURRENT_USER, base)
+                _pv, _ = winreg.QueryValueEx(_pk, "ExtendedSubCommandsKey")
+                winreg.CloseKey(_pk)
+                if _pv != CASCADE_SUBKEY_REL:
+                    print(t("ctx_self_check_verb_err", verb_path=f"{base}\\ExtendedSubCommandsKey"), file=sys.stderr)
+                    self_check_ok = False
+            except FileNotFoundError:
+                print(t("ctx_self_check_verb_err", verb_path=f"{base}\\ExtendedSubCommandsKey"), file=sys.stderr)
+                self_check_ok = False
             for name, _, _ in SUB_COMMANDS:
-                verb_path = f"{base}\\shell\\{name}\\open\\command"
+                verb_path = f"{base}\\Shell\\{name}\\command"
                 try:
                     _k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, verb_path)
                     _v, _ = winreg.QueryValueEx(_k, "")
@@ -351,6 +421,12 @@ def main(argv=None):
     if "--update-fingerprint" in argv_list or _is_meta:
         pass
     elif getattr(args, "trust_default", False):
+        # v0.7.23: 锁定期间拒绝 --trust-default
+        #   (它会自动重写指纹, 是绕过 L5 的一条路, 必须同样受失败锁定约束)
+        _locked, _remain = _fp_lock_state()
+        if _locked:
+            print(t("err_fp_locked", seconds=_remain))
+            return 1
         if not check_fingerprint(silent=True):
             new_fp = compute_fingerprint()
             FP_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -390,12 +466,58 @@ def main(argv=None):
         from pandaone import __version__
         print(f"pandaone v{__version__}")
         return 0
-    if getattr(args, "update_fingerprint", None):
-        pwd = args.update_fingerprint
-        expected = get_fingerprint_password()
-        if pwd != expected:
-            print(t("err_password_wrong"))
+    # ================================================================
+    # v0.7.23: 指纹密码管理
+    #   - 默认密码仍是 "0000"（用户明确要求保留默认值），但用户可自行改密
+    #   - 比较走 hmac.compare_digest（常量时间，防时序侧信道）
+    #   - 连续输错触发短时锁定，防暴力猜
+    # ================================================================
+    if getattr(args, "set_fingerprint_password", None) is not None:
+        from pandaone.fp_security import FP_MIN_PASSWORD_LENGTH
+
+        new_pwd = args.set_fingerprint_password
+        if not new_pwd:
+            print(t("err_fp_password_empty"))
             return 1
+        if len(new_pwd) < FP_MIN_PASSWORD_LENGTH:
+            print(t("err_fp_password_too_short", min_len=FP_MIN_PASSWORD_LENGTH))
+            return 1
+        try:
+            p = _fp_set_password(new_pwd)
+        except ValueError:
+            print(t("err_fp_password_empty"))
+            return 1
+        print(t("ok_fp_password_set", path=p))
+        return 0
+
+    if getattr(args, "reset_fingerprint_password", False):
+        p = _fp_clear_password()
+        print(t("ok_fp_password_reset", path=p))
+        return 0
+
+    if getattr(args, "reset_fingerprint_lock", False):
+        _fp_reset_lock()
+        print(t("ok_fp_lock_reset"))
+        return 0
+
+    if getattr(args, "update_fingerprint", None):
+        from pandaone.fp_security import FP_MAX_FAILURES, FP_LOCK_SECONDS
+
+        pwd = args.update_fingerprint
+        # 锁定中 → 即使密码正确也拒绝（防暴力猜）
+        locked, remain = _fp_lock_state()
+        if locked:
+            print(t("err_fp_locked", seconds=remain))
+            return 1
+        expected = get_fingerprint_password()
+        # 常量时间比较（hmac.compare_digest），不用明文 !=
+        if not _fp_verify_password(pwd, expected):
+            fails = _fp_register_failure()
+            print(t("err_password_wrong"))
+            if fails >= FP_MAX_FAILURES:
+                print(t("err_fp_locked_now", seconds=FP_LOCK_SECONDS))
+            return 1
+        _fp_clear_failures()
         new_fp = compute_fingerprint()
         # v0.7.21.3 fix: 走 _save_fp json 格式（跟 _load_fp / check_fingerprint 一致）
         _save_fp(_get_pandaone_version(), new_fp)

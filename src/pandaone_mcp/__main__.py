@@ -36,6 +36,21 @@ ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT.parent  # src/
 
 
+def _fp_password() -> str:
+    """指纹密码：默认 "0000"，用户可自定义。
+
+    v0.7.23: 之前 MCP 这里硬编码 "0000"，用户改了指纹密码后
+    MCP 这条路就走不通（agent 传的密码永远对不上）。
+    现在与 CLI 共用同一套优先级（环境变量 → 配置文件 → 默认 0000）。
+    """
+    try:
+        from pandaone.fp_security import get_fingerprint_password
+
+        return get_fingerprint_password()
+    except Exception:
+        return "0000"
+
+
 # ============================================================
 # 工具定义（MCP tools/list 返回的 schema）
 # ============================================================
@@ -349,7 +364,7 @@ HANDLERS = {
          *(["--probe-only"] if not p.get("auto_download") else []),
          *(["--auto-download"] if p.get("auto_download") else [])]),
     "pandaone_fingerprint_update": lambda p: _run_cli(
-        ["--update-fingerprint", p.get("password", "0000")]),
+        ["--update-fingerprint", p.get("password") or _fp_password()]),
     "pandaone_ci": lambda p: _run_cli(["ci", *_args_from(p, [
         ("root", "--root"), ("base", "--base"), ("head", "--head")])], timeout=30),
 }

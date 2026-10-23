@@ -239,8 +239,15 @@ def cmd_status(args):
     print()
     print(t("status_l5"))
     if FP_PATH.exists():
-        stored = FP_PATH.read_text(encoding="utf-8").strip()
         current = compute_fingerprint()
+        # v0.7.22 fix: FP_PATH 自 v0.7.21.2 起是 json {version, hash, stored_at},
+        # 这里之前直接拿整段文本跟 hex digest 比 → 永远不相等 → status 永远误报
+        # "指纹不匹配"。改用 _load_fp() 统一解析 (兼容旧裸 hex)。
+        stored = ""
+        try:
+            _ver, stored, _migrated = _load_fp()
+        except Exception:
+            stored = FP_PATH.read_text(encoding="utf-8").strip()
         if stored == current:
             print(t("status_fp_ok", fp=stored[:16]))
         else:

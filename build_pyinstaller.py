@@ -1,193 +1,392 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-build.py — Pandaone AI Agent 完整打包脚本（Python 版，跨平台）
+build_pyinstaller.py — Pandaone AI Agent Windows release packager.
 
-用法:
-  python build.py
+Replaces the legacy single-file packager (it still pointed at the removed
+``pandaone.py`` / ``pandaone_guard.py`` / ``install_hook.py`` at repo root and
+at a non-existent ``installer/pandaone.iss``).  The project is now a src-layout
+package tree, so every path below is derived from ``src/``.
 
-步骤:
-  1. 清理旧产物
-  2. PyInstaller 打包 pandaone.exe
-  3. PyInstaller 打包 pandaone_guard.exe
-  4. 合并 _internal 目录
-  5. 准备安装包 staging
-  6. 调用 Inno Setup 编译（如可用）
+Pipeline
+--------
+  0. preflight   — check PyInstaller / source layout / version
+  1. clean       — remove stale build/, dist/, installer/staging, installer/Output
+  2. build       — PyInstaller x3: pandaone.exe / pandaone_guard.exe / pandaone-mcp.exe
+  3. merge       — fold the two satellite _internal dirs into pandaone's
+  4. staging     — flatten dist/pandaone into installer/staging
+  5. iss         — render src/pandaone/installer/codeaudit.iss with the live
+                   version + icon + output name
+  6. inno        — compile with ISCC.exe -> installer/Output/PandaoneSetup-<ver>-x64.exe
 
-第一性原理:
-  - Python 脚本跨平台（Windows / Linux / macOS）
-  - 避免 bat 文件的 GBK 编码问题
+Why the package source tree is copied in as *data*
+--------------------------------------------------
+``src/pandaone/cli.py`` loads its subcommands by ``exec()``-ing the files in
+``cli_chunks/`` at runtime, and the L5 self-fingerprint hashes the whole package
+directory.  Neither survives a plain PyInstaller build: the .py files would be
+compiled into the PYZ archive and vanish from disk.
+
+So we copy the whole ``src/pandaone`` and ``src/pandaone_guard`` trees into the
+bundle as data.  That keeps (a) the exec-based CLI loader working and (b) the
+fingerprint scope identical between a source checkout and a frozen .exe.
+
+Usage
+-----
+    python build_pyinstaller.py              # full build
+    python build_pyinstaller.py --skip-iss   # only produce dist/pandaone/
+    python build_pyinstaller.py --clean-only
 """
+from __future__ import annotations
+
+import argparse
+import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+PKG = SRC / "pandaone"
+GUARD = SRC / "pandaone_guard"
+MCP = SRC / "pandaone_mcp"
+PACKAGING = ROOT / "packaging"
 
+DIST = ROOT / "dist"
+STAGING = ROOT / "installer" / "staging"
+ISSUED = ROOT / "installer" / "Output"
+ISS_TEMPLATE = PKG / "installer" / "codeaudit.iss"
+ISS_RENDERED = ROOT / "installer" / "pandaone.iss"
+
+ISCC_CANDIDATES = [
+    Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+    Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+    Path(r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe"),
+    # per-user install (winget / Inno Setup default for the current user)
+    Path.home() / "AppData" / "Local" / "Programs" / "Inno Setup 6" / "ISCC.exe",
+]
+
+#: Third-party + package modules that PyInstaller's static analysis cannot see.
+#: The cli_chunks/*.py are exec()'d at runtime, so their imports are invisible
+#: to the module graph — every one of them must be declared explicitly.
+HIDDEN_IMPORTS = [
+    # chunk 内 exec 出来的 import（静态分析抓不到）
+    "pandaone.exporters",
+    "pandaone.i18n",
+    "pandaone.fp_security",
+    "pandaone.gitignore_helper",
+    "pandaone.desktop_icon",
+    "pandaone.git_installer",
+    "pandaone.pandaone_serve",
+    "pandaone.i18n_extras",
+    "pandaone.git_ops",
+    # monkey-patch 注册的新子命令
+    "pandaone.cmd_doctor",
+    "pandaone.cmd_setup",
+    "pandaone.cmd_upgrade",
+    "pandaone.cmd_backup",
+    "pandaone.cmd_install_mcp",
+    "pandaone_guard",
+    # 第三方
+    "psutil",
+    "yaml",
+    "watchdog",
+    "watchdog.events",
+    "watchdog.observers",
+    "watchdog.observers.polling",
+    "pkg_resources",
+]
+if os.name == "nt":
+    HIDDEN_IMPORTS.append("winreg")  # part_006 里 exec 出来的 Windows 注册表操作
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 
 def run(cmd: list[str], cwd: Path | None = None) -> int:
-    """执行命令并打印输出"""
-    print(f"$ {' '.join(cmd)}")
-    r = subprocess.run(cmd, cwd=str(cwd) if cwd else None)
+    print(f"$ {' '.join(str(c) for c in cmd)}")
+    r = subprocess.run([str(c) for c in cmd], cwd=str(cwd) if cwd else None)
     return r.returncode
 
 
-def clean():
-    """清理旧产物"""
-    print("\n[1/6] 清理旧产物...")
-    for d in ["build", "dist", "installer/staging", "installer/Output"]:
-        p = ROOT / d
-        if p.exists():
-            shutil.rmtree(p, ignore_errors=True)
-            print(f"  删除: {d}")
+def read_version() -> str:
+    """Read the single source of truth for the version: pyproject.toml."""
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^\s*version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not m:
+        raise SystemExit("version not found in pyproject.toml")
+    return m.group(1)
 
 
-def build_pandaone():
-    print("\n[2/6] 打包 pandaone.exe...")
+def data_sep() -> str:
+    return ";" if os.name == "nt" else ":"
+
+
+def add_data(src: Path, dest: str) -> str:
+    """Build one --add-data argument (dest must be a directory)."""
+    return f"{src}{data_sep()}{dest}"
+
+
+def package_data_args() -> list[str]:
+    """--add-data arguments.
+
+    The whole package tree is copied verbatim so that
+      * cli_chunks/part_*.py stay readable by the exec() based CLI loader, and
+      * the L5 fingerprint scope matches the source checkout exactly.
+
+    ``_build_info.py`` (version stamp) is injected into the pandaone/ folder
+    of the bundle — a frozen exe has no pyproject.toml to read the version
+    from.
+    """
+    args = [
+        add_data(PKG, "pandaone"),
+        add_data(GUARD, "pandaone_guard"),
+    ]
+    stamp = ROOT / "build" / "_build_info.py"
+    if stamp.is_file():
+        args.append(add_data(stamp, "pandaone"))
+    return args
+
+
+def pyinstaller_cmd(name: str, entry: Path, extra_data: list[str] | None = None) -> list[str]:
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name", "pandaone",
+        "--name", name,
         "--onedir",
         "--console",
-        "--add-data", "README.md;.",
-        "--add-data", "templates;templates",
-        "--add-data", "pandaone.py;.",
-        "--add-data", "pandaone_guard.py;.",
-        "--add-data", "install_hook.py;.",
-        "--hidden-import", "watchdog.observers",
-        "--hidden-import", "watchdog.events",
-        "--hidden-import", "watchdog.observers.polling",
-        "--exclude-module", "tkinter",
-        "--exclude-module", "matplotlib",
-        "--exclude-module", "numpy",
         "--noconfirm",
-        str(ROOT / "pandaone.py"),
+        "--clean",
+        "--paths", str(SRC),
+        "--distpath", str(DIST),
+        "--workpath", str(ROOT / "build" / name),
+        "--specpath", str(ROOT / "build"),
     ]
-    return run(cmd, cwd=ROOT)
+    for d in (extra_data or []) + package_data_args():
+        cmd += ["--add-data", d]
+    for mod in HIDDEN_IMPORTS:
+        cmd += ["--hidden-import", mod]
+    for mod in ("tkinter", "matplotlib", "numpy", "PIL"):
+        cmd += ["--exclude-module", mod]
+    cmd.append(str(entry))
+    return cmd
 
 
-def build_watchdog():
-    print("\n[3/6] 打包 pandaone_guard.exe...")
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--name", "pandaone_guard",
-        "--onedir",
-        "--console",
-        "--hidden-import", "watchdog.observers",
-        "--hidden-import", "watchdog.events",
-        "--hidden-import", "watchdog.observers.polling",
-        "--exclude-module", "tkinter",
-        "--noconfirm",
-        str(ROOT / "pandaone_guard.py"),
+# ---------------------------------------------------------------------------
+# steps
+# ---------------------------------------------------------------------------
+
+def preflight() -> str:
+    print("\n[0/6] Preflight...")
+    missing = [p for p in (PKG, GUARD, MCP, PACKAGING) if not p.is_dir()]
+    if missing:
+        raise SystemExit(f"missing source layout: {[str(p) for p in missing]}")
+    r = subprocess.run([sys.executable, "-m", "PyInstaller", "--version"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("PyInstaller not installed.  pip install pyinstaller")
+    print(f"  PyInstaller {r.stdout.strip()}")
+    version = read_version()
+    print(f"  version {version}")
+    return version
+
+
+def clean() -> None:
+    print("\n[1/6] Clean stale artifacts...")
+    for d in (ROOT / "build", DIST, STAGING, ISSUED):
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+            print(f"  removed {d.relative_to(ROOT)}")
+    # __pycache__ inside the package tree would be copied into the bundle
+    for cache in list(SRC.rglob("__pycache__")):
+        shutil.rmtree(cache, ignore_errors=True)
+    # generated build stamp (recreated below)
+    bi = PKG / "_build_info.py"
+    if bi.exists():
+        bi.unlink()
+    print("  purged __pycache__ under src/")
+
+
+def write_build_info(version: str) -> Path:
+    """Generate the version stamp that travels with the bundle.
+
+    A frozen .exe has neither pyproject.toml nor install metadata, so the
+    version has to travel with the bundle.  ``pandaone/__init__.py`` reads
+    ``_MEIPASS/pandaone/_build_info.py`` when running frozen.
+
+    The file is written to the (git-ignored) build/ directory, NOT into the
+    source tree — the source tree must stay clean, otherwise the source-tree
+    fingerprint would change on every build.
+    """
+    from datetime import datetime, timezone
+
+    bi = ROOT / "build" / "_build_info.py"
+    bi.parent.mkdir(parents=True, exist_ok=True)
+    bi.write_text(
+        "# -*- coding: utf-8 -*-\n"
+        "# Generated by build_pyinstaller.py - DO NOT EDIT.\n"
+        f'__version__ = "{version}"\n'
+        f'BUILD_TIMESTAMP = "{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}"\n',
+        encoding="utf-8",
+    )
+    print(f"  wrote {bi.relative_to(ROOT)} (version {version})")
+    return bi
+
+
+def build_all() -> int:
+    print("\n[2/6] PyInstaller build...")
+    jobs = [
+        ("pandaone", PACKAGING / "entry_pandaone.py"),
+        ("pandaone_guard", PACKAGING / "entry_guard.py"),
+        ("pandaone-mcp", PACKAGING / "entry_mcp.py"),
     ]
-    return run(cmd, cwd=ROOT)
+    for name, entry in jobs:
+        print(f"  -> {name}.exe")
+        rc = run(pyinstaller_cmd(name, entry))
+        if rc != 0:
+            print(f"  [FAIL] {name}")
+            return rc
+    return 0
 
 
-def merge_internals():
-    print("\n[4/6] 合并 _internal 目录...")
-    src = ROOT / "dist" / "pandaone_guard" / "_internal"
-    dst = ROOT / "dist" / "pandaone" / "_internal"
-    if src.exists() and dst.exists():
-        for item in src.iterdir():
-            target = dst / item.name
-            if item.is_dir():
-                if target.exists():
-                    shutil.rmtree(target)
-                shutil.copytree(item, target)
-            else:
-                shutil.copy2(item, target)
-        print(f"  合并 {len(list(src.iterdir()))} 个文件到 {dst}")
-
-    # 复制 pandaone_guard.exe
-    src_exe = ROOT / "dist" / "pandaone_guard" / "pandaone_guard.exe"
-    dst_exe = ROOT / "dist" / "pandaone" / "pandaone_guard.exe"
-    if src_exe.exists():
-        shutil.copy2(src_exe, dst_exe)
-        print(f"  复制 {dst_exe.name}")
-
-    # 删除 pandaone_guard 目录
-    shutil.rmtree(ROOT / "dist" / "pandaone_guard", ignore_errors=True)
+def merge_internals() -> None:
+    print("\n[3/6] Merge satellite _internal dirs...")
+    target = DIST / "pandaone" / "_internal"
+    for satellite in ("pandaone_guard", "pandaone-mcp"):
+        src = DIST / satellite / "_internal"
+        if src.exists() and target.exists():
+            for item in src.iterdir():
+                dst = target / item.name
+                if item.is_dir():
+                    if dst.exists():
+                        shutil.rmtree(dst, ignore_errors=True)
+                    shutil.copytree(item, dst)
+                else:
+                    shutil.copy2(item, dst)
+            print(f"  merged {satellite}/_internal")
+        exe = DIST / satellite / f"{satellite}.exe"
+        if exe.exists():
+            shutil.copy2(exe, DIST / "pandaone" / exe.name)
+            print(f"  copied {exe.name}")
 
 
-def prepare_staging():
-    print("\n[5/6] 准备安装包 staging...")
-    staging = ROOT / "installer" / "staging"
-    staging.mkdir(parents=True, exist_ok=True)
-    src = ROOT / "dist" / "pandaone"
+def prepare_staging() -> None:
+    print("\n[4/6] Prepare staging...")
+    STAGING.mkdir(parents=True, exist_ok=True)
+    src = DIST / "pandaone"
     for item in src.iterdir():
-        target = staging / item.name
+        dst = STAGING / item.name
         if item.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(item, target)
+            if dst.exists():
+                shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(item, dst)
         else:
-            shutil.copy2(item, target)
-    print(f"  复制 {len(list(src.iterdir()))} 项到 {staging}")
+            shutil.copy2(item, dst)
+    print(f"  staged {len(list(src.iterdir()))} entries -> {STAGING.relative_to(ROOT)}")
 
 
-def try_inno_setup():
-    print("\n[6/6] 尝试 Inno Setup 编译...")
-    iss = ROOT / "installer" / "pandaone.iss"
-    if not iss.exists():
-        print(f"  [WARN] 找不到 {iss}")
-        return
+def render_iss(version: str, iscc: Path | None = None) -> Path:
+    """Render the Inno Setup script with the live version / icon / output name."""
+    print("\n[5/6] Render Inno Setup script...")
+    text = ISS_TEMPLATE.read_text(encoding="utf-8")
 
-    # 检查 iscc 是否可用
-    iscc = shutil.which("iscc")
+    text = re.sub(r'#define MyAppVersion "[^"]*"',
+                  f'#define MyAppVersion "{version}"', text)
+    text = re.sub(r'OutputBaseFilename=.*',
+                  lambda _m: 'OutputBaseFilename=PandaoneSetup-{#MyAppVersion}-x64', text)
+    # assets/pandaone.ico never existed; the shipped icons live in assets/
+    # NOTE: replacement must be a lambda — a plain string would interpret the
+    # backslashes of "..\assets\..." as regex escapes.
+    text = re.sub(r'SetupIconFile=.*',
+                  lambda _m: r'SetupIconFile=..\assets\pandax_unlocked.ico', text)
+
+    # Inno Setup ships English + ~30 translations, but NOT Simplified Chinese
+    # (that .isl is a third-party add-on).  Only keep the language entry when
+    # the file is actually present, otherwise ISCC aborts the whole compile.
+    if iscc is not None:
+        lang_dir = iscc.parent / "Languages"
+        if not (lang_dir / "ChineseSimplified.isl").exists():
+            text = re.sub(r'^Name:\s*"chinesesimp".*\n', "", text, flags=re.M)
+            print("  Simplified Chinese .isl not installed -> english only")
+
+    ISS_RENDERED.parent.mkdir(parents=True, exist_ok=True)
+    ISS_RENDERED.write_text(text, encoding="utf-8")
+    print(f"  wrote {ISS_RENDERED.relative_to(ROOT)} (version {version})")
+    return ISS_RENDERED
+
+
+def find_iscc() -> Path | None:
+    which = shutil.which("iscc")
+    if which:
+        return Path(which)
+    for p in ISCC_CANDIDATES:
+        if p.exists():
+            return p
+    return None
+
+
+def try_inno_setup(version: str) -> int:
+    print("\n[6/6] Inno Setup compile...")
+    iscc = find_iscc()
+    iss = render_iss(version, iscc)
     if iscc is None:
-        # Windows 默认路径
-        for p in [
-            Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
-            Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
-        ]:
-            if p.exists():
-                iscc = str(p)
-                break
-
-    if iscc is None:
-        print(f"  [INFO] Inno Setup 未安装")
-        print(f"        下载地址: https://jrsoftware.org/isdl.php")
-        print(f"        安装后运行: {iscc} {iss}")
-        return
-
-    cmd = [iscc, str(iss)]
-    rc = run(cmd, cwd=ROOT)
-    if rc == 0:
-        output = ROOT / "installer" / "Output"
-        if output.exists():
-            exes = list(output.glob("*.exe"))
-            if exes:
-                print(f"  [OK] 安装包已生成: {exes[0]}")
+        print("  [SKIP] Inno Setup 6 not found.")
+        print("         install: winget install JRSoftware.InnoSetup")
+        print(f"         or run : \"{iscc}\" {iss}" if iscc else
+              "         then  : iscc installer\\pandaone.iss")
+        return 0
+    rc = run([str(iscc), str(iss)])
+    if rc == 0 and ISSUED.exists():
+        exes = sorted(ISSUED.glob("*.exe"))
+        for exe in exes:
+            print(f"  [OK] {exe.name}  ({exe.stat().st_size:,} bytes)")
+    else:
+        print(f"  [FAIL] ISCC rc={rc}")
+    return rc
 
 
-def main():
-    print("=" * 60)
-    print("Pandaone 完整打包脚本")
-    print("=" * 60)
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Pandaone Windows release packager")
+    ap.add_argument("--skip-iss", action="store_true", help="only build dist/pandaone/")
+    ap.add_argument("--iss-only", action="store_true",
+                    help="re-render and recompile the installer only (reuse dist/)")
+    ap.add_argument("--clean-only", action="store_true", help="clean and exit")
+    args = ap.parse_args()
+
+    print("=" * 64)
+    print("Pandaone AI Agent — release packager")
+    print("=" * 64)
+
+    version = preflight()
+    if args.iss_only:
+        try_inno_setup(version)
+        return 0
 
     clean()
-    if build_pandaone() != 0:
-        print("[ERROR] 打包 pandaone.exe 失败")
-        return 1
-    if build_watchdog() != 0:
-        print("[ERROR] 打包 pandaone_guard.exe 失败")
+    if args.clean_only:
+        return 0
+    write_build_info(version)
+
+    if build_all() != 0:
+        print("\n[ERROR] PyInstaller build failed")
         return 1
     merge_internals()
     prepare_staging()
-    try_inno_setup()
 
-    print("\n" + "=" * 60)
-    print("[OK] 打包完成")
-    print("=" * 60)
-    print("\n产物:")
-    for exe in (ROOT / "dist" / "pandaone").glob("*.exe"):
-        print(f"  - {exe.name} ({exe.stat().st_size:,} bytes)")
-    print("\n分发目录:")
-    staging = ROOT / "installer" / "staging"
-    if staging.exists():
-        for exe in staging.glob("*.exe"):
-            print(f"  - installer/staging/{exe.name}")
+    if not args.skip_iss:
+        try_inno_setup(version)
+
+    print("\n" + "=" * 64)
+    print("[OK] Pack finished")
+    print("=" * 64)
+    dist = DIST / "pandaone"
+    if dist.exists():
+        for exe in sorted(dist.glob("*.exe")):
+            print(f"  dist/pandaone/{exe.name}  ({exe.stat().st_size:,} bytes)")
+    if ISSUED.exists():
+        for exe in sorted(ISSUED.glob("*.exe")):
+            print(f"  installer/Output/{exe.name}  ({exe.stat().st_size:,} bytes)")
     return 0
 
 
