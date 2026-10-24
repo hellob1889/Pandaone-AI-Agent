@@ -274,7 +274,7 @@ def _file_url(path: Path) -> str:
 
 
 def _mirror_by_copy(root: Path, target: Path) -> Path:
-    """回退方案：直接复制 ``.git`` 目录，得到一个**本地仓库**镜像。
+    """回退方案：手工造一个**标准 bare 布局**的本地镜像。
 
     为什么需要回退：
     ``git clone --mirror`` 在 **Windows** 上必然走 smart transport
@@ -285,30 +285,47 @@ def _mirror_by_copy(root: Path, target: Path) -> Path:
     且路径含中文时 MSYS 的 sh 也定位不到，最终报
     "git-upload-pack: command not found / fatal: Could not read from
     remote repository"。
+    （实测连 ``--local`` 也一样：clone 本地路径同样要 upload-pack。）
 
-    为什么复制成**普通仓库**而不是裸仓库：
-    git 的 local clone 优化（``clone_local``）只对**普通仓库**生效；
-    裸仓库源仍会走传输层 → 同样需要 git-upload-pack。
-    复制成 ``<target>/.git/...`` 后，用户可以用
-    ``git clone --local <target> <dir>`` 在任何平台零依赖地恢复 ✅
+    为什么产出 **bare** 布局（``HEAD`` / ``objects`` / ``refs`` 直接在
+    ``target`` 下）而不是 ``target/.git/``：
+    - 与 ``git clone --mirror`` 的产出**完全一致** → 两平台布局统一，
+      镜像拷到另一台机器，恢复方式不变；
+    - 裸仓库能被 ``git --git-dir=<mirror>`` **离线读取**，不依赖任何
+      传输层 —— 这才是"备份"的意义（Windows 上 ``git clone`` 本地路径
+      恰恰不可用）；
+    - ``git clone --mirror`` 的镜像语义（``remote.origin.mirror=true``）
+      也能如实写进 config。
 
-    同时复制 ``info/`` ``logs/`` ``refs/`` ``objects/`` 全套，
-    恢复出来的仓库与源仓库等价（含全部 ref 与历史）。
+    v0.7.31.0 之前这里产出的是 ``target/.git/`` 嵌套布局：它跟文档里
+    承诺的恢复方式（``git clone --local <target> <dir>``）对不上
+    （实测 rc=128 "does not appear to be a git repository"），
+    属于"照着文档恢复不出来"的坏布局。
     """
     src_git = root / ".git"
     if not src_git.is_dir():
         raise GitOpsError(f"cannot find .git directory in {root}")
-    dest_git = target / ".git"
     target.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src_git, dest_git, symlinks=False)
-    cfg = dest_git / "config"
-    if cfg.is_file():
-        # 清掉指向原工作区的绝对路径（复制后已无意义）
-        run_git(
-            ["config", "--file", str(cfg), "--unset", "core.worktree"],
-            cwd=target,
-            check=False,
-        )
+    # 1) 让 git 自己建 bare 骨架（core.bare=true 等配置由它写，别手搓）
+    run_git(["init", "--bare", "--quiet", str(target)], cwd=target.parent)
+    # 2) 复制载荷（objects / refs / packed-refs / HEAD），但保留 git 的 config
+    for name in ("objects", "refs", "packed-refs", "HEAD"):
+        s = src_git / name
+        d = target / name
+        if not s.exists():
+            continue
+        if s.is_dir():
+            shutil.copytree(s, d, dirs_exist_ok=True, symlinks=False)
+        else:
+            shutil.copy2(s, d)
+    # 3) 补上镜像语义：origin url + 全量 refspec + mirror 标记
+    run_git(["config", "remote.origin.url", str(root)], cwd=target, check=False)
+    run_git(
+        ["config", "--add", "remote.origin.fetch", "+refs/*:refs/*"],
+        cwd=target,
+        check=False,
+    )
+    run_git(["config", "remote.origin.mirror", "true"], cwd=target, check=False)
     return target
 
 
@@ -316,7 +333,11 @@ def create_mirror(root: str | Path, dest: str | Path) -> Path:
     """用本地**裸仓库**做镜像（`git clone --mirror` 到本地路径）。
 
     - 不需要任何远程账号
-    - 裸仓库可直接再 clone 回来
+    - 产出是标准 bare 布局（``HEAD`` / ``objects`` / ``refs`` 直接在 target 下），
+      与 Linux 上的 ``git clone --mirror`` 产出**完全一致**
+    - 恢复不依赖传输层：``git --git-dir=<mirror> rev-parse HEAD`` 即可读；
+      （Windows 上 ``git clone <本地路径>`` 会因缺 git-upload-pack 而失败，
+      别用 clone 恢复，用 git-dir 读或直接复制 objects/refs）
     """
     root = Path(root).resolve()
     target = Path(dest).expanduser().resolve()
@@ -334,7 +355,7 @@ def create_mirror(root: str | Path, dest: str | Path) -> Path:
         )
         return target
     except GitOpsError:
-        # Windows 上 clone 本地路径会因缺 git-upload-pack 失败 -> 退回复制 .git
+        # Windows 上 clone 本地路径会因缺 git-upload-pack 失败 -> 退回手工造 bare
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
         return _mirror_by_copy(root, target)
