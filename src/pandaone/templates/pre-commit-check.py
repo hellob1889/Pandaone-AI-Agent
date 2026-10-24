@@ -41,14 +41,26 @@ def _resolve_git_exe():
     which = shutil.which("git")
     if which:
         candidates.append(which)
+    # Git 在 hook 环境里会注入 GIT_EXEC_PATH
+    # （Windows: <root>\mingw64\libexec\git-core；Linux: /usr/libexec/git-core）
+    # -> 从它反推安装根，再找根目录下的 git 可执行文件。
+    # 这比硬编码任何人的安装路径都可靠：Git for Windows 装在 C/D/E 盘任意
+    # 位置都能命中，也不必把作者机器的目录结构分发到每个用户机器上。
+    exec_path = os.environ.get("GIT_EXEC_PATH") or ""
+    if exec_path:
+        parents = [os.path.dirname(exec_path), os.path.dirname(os.path.dirname(exec_path))]
+        for parent in parents:
+            if not parent:
+                continue
+            for sub, exe in (("cmd", "git.exe"), ("bin", "git.exe"),
+                             ("bin", "git"), ("cmd", "git")):
+                candidates.append(os.path.join(parent, sub, exe))
     # Common Windows install locations
     for d in (
         r"C:\Program Files\Git\cmd\git.exe",
         r"C:\Program Files\Git\mingw64\bin\git.exe",
         r"C:\Program Files (x86)\Git\cmd\git.exe",
         r"C:\Program Files (x86)\Git\mingw64\bin\git.exe",
-        r"D:\软件\Git\cmd\git.exe",
-        r"D:\软件\Git\mingw64\bin\git.exe",
     ):
         if os.path.exists(d):
             candidates.append(d)
