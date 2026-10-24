@@ -347,3 +347,41 @@ Windows 解析一个命令时，实际搜索路径是：
 Inno Setup 里靠 `{olddata}` 记住安装前的 Path 值，卸载时还原；
 自己额外写入的条目需要在 `CurUninstallStepChanged` 里显式摘除。
 v0.7.27.0 补上了这条，真机实测：卸载后 PATH 里 `%LOCALAPPDATA%\Pandaone` 已消失。
+
+### 7.8 跨平台产物必须在 CI 目标 OS 上验证
+
+本仓库的 CI 在 **Ubuntu** 上跑全量 pytest。只在 Windows 本地跑绿**不算数**：
+v0.7.31.0 的 Ubuntu CI 连续红两次，挖出三类**静默失真**型平台假设 ——
+它们不报错、不崩，只是在 Windows 上永远看不见：
+
+| 类型 | 例子 | 为什么本地看不见 |
+|---|---|---|
+| 入口文件名 | `pandaone.exe` vs `pandaone`（POSIX 无扩展名） | Windows 上两种后缀都能造出来，测试恰好通过 |
+| PATH 分隔符 | `;` vs `:` | Windows 上用 `;` 拼出来的单元素 PATH 恰好合法 |
+| 目录布局 | bare `mirror/HEAD` vs `mirror/.git/HEAD` | Windows 分支恰好产出了被断言的那种 |
+
+规矩：
+
+- 测试里**不许**出现硬编码的平台字面量。平台差异用**产品自己的常量**
+  或 `sys.platform` 分支表达（`path_conflicts.CONSOLE_SCRIPT_NAMES` 就是这个模式）。
+- 写完代码**先在本地跑测试再提交** —— v0.7.31.0 首轮 CI 挂在 `tests/conftest.py`
+  的 `SyntaxError`（docstring 里写了 `r"""` 三引号导致提前闭合），本地没跑，白白浪费一轮 CI。
+- 需要在别的 OS 上验证时，可以**本地模拟**：`os.name` 是可写的 module 属性，
+  改完 `importlib.reload()` 即可切到 POSIX 分支。注意**先建好临时文件再改** `os.name`，
+  否则 `pathlib.Path` 会解析成 `PosixPath`，在 Windows 上实例化直接报错。
+
+### 7.9 本地镜像的布局与恢复方式
+
+`pandaone backup --mirror <dir>` 产出的**必须是标准 bare 布局**
+（`HEAD` / `objects` / `refs` 直接在 `<dir>` 下），和 `git clone --mirror` 完全一致：
+
+- 两平台布局统一，镜像拷到另一台机器恢复方式不变；
+- 裸仓库能被 `git --git-dir=<mirror>` **离线读取**，不依赖任何传输层。
+
+**恢复不要用 `git clone`**：Windows 上 `git clone <本地路径>` 会去调 `git-upload-pack`，
+而 Git for Windows 的 `cmd/` 下只有 `git-upload-pack.exe`、没有无后缀的 sh 脚本
+-> `git-upload-pack: command not found`（连 `--local` 也一样）。
+正确姿势是 `git --git-dir=<mirror> rev-parse HEAD` 读，或直接复制 `objects/` + `refs/`。
+
+v0.7.31.0 之前这里产出的是 `target/.git/` 嵌套布局：跟文档里承诺的恢复方式对不上，
+四种 clone 方式实测全 rc=128 —— 属于"照着文档恢复不出来"的坏布局。
