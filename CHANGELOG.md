@@ -78,6 +78,33 @@ MCP 只是第一个爆的。同一类地雷全仓还有 9 处，全部修掉：
 - `tools/call pandaone_init` -> **isError=false**，`.pandaone/` 正常建成；
 - `tools/call pandaone_status` / `pandaone_log` -> **isError=false**。
 
+### Fixed: 跨平台盲区 —— Ubuntu CI 上 7 个用例变红挖出的三类平台假设
+
+CI 是有价值的：v0.7.31.0 的首轮 Ubuntu CI 连续红两次，第二次暴露出**同一类根因的三个平台假设**。
+它们的共同特征是「**不报错、不崩，只是静默失真**」—— 在 Windows 上永远看不见。
+
+| # | 位置 | 现象 | 根因 | 修法 |
+|---|---|---|---|---|
+| 1 | `src/pandaone/path_conflicts.py` | Linux/macOS 上 `find_all()` / `shadows()` 恒返回空，整套 PATH 抢占检测**静默失效** | 入口名常量只列了 Windows 后缀（`pandaone.exe/.cmd/.bat`），而 POSIX 上 pip 生成的是**无扩展名**的 `pandaone` | 按 `os.name` 分平台构造 `CONSOLE_SCRIPT_NAMES` / `MCP_SCRIPT_NAMES`；同一目录只取第一个命中的名字（避免 `.exe` 与 `.cmd` 被数成两处）；self 命中时继续检查同目录的其它入口（如 `pandaone-mcp`） |
+| 2 | `src/pandaone/git_ops.py` | Windows 上产出的本地镜像**照着文档恢复不出来**（`git clone --local` / `clone --bare` / `clone <mirror>/.git` 四种方式实测全部 rc=128） | 回退逻辑产出 `target/.git/` 嵌套布局，与 `git clone --mirror` 的 bare 布局不一致；而 Windows 上 `git clone` 本地路径必然要调 `git-upload-pack`（Git for Windows 的 `cmd/` 只有 `.exe` 没有无后缀 sh 脚本） | 回退改为 `git init --bare` 生成骨架后复制 `objects/refs/packed-refs/HEAD`，并写入 `remote.origin.url` / `fetch` refspec / `mirror` 标记；**两平台布局统一**，且可被 `git --git-dir=<mirror>` 离线读取 |
+| 3 | `src/pandaone/templates/pre-commit-check.py` | 模板里写死了作者本机的 `D:\软件\Git\...` 路径 | 早期为绕过 hook 子 shell PATH 为空留下的硬编码，但该模板会**分发到所有用户机器** | 改为优先 `GIT_EXECUTABLE` 与 PATH，再从 git 注入的 `GIT_EXEC_PATH` 反推安装根目录（任意盘符都能命中），最后才退到 `Program Files` 常见位置 |
+
+配套测试改造（`tests/`）：
+- `test_cmd_setup_upgrade.py`：入口名按平台取 `CONSOLE_ENTRY` / `MCP_ENTRY`，PATH 拼接改 `os.pathsep`；
+- `test_cmd_backup.py` / `test_git_ops.py`：镜像断言兼容两种合法布局，并新增**离线可读 + 内容完整 + 可原样复制**三条真正契约
+  （刻意**不用** `git clone` 验证 —— 那测的是 git 的环境，不是我们的备份）。
+
+### 踩坑留档
+
+- **改完代码必须先跑测试再提交**：v0.7.31.0 首轮 CI 挂在 `tests/conftest.py` 的 `SyntaxError`（docstring 里写了 `r"""` 三引号导致提前闭合）——
+  本地没跑测试就提交，白白浪费一轮 CI。
+- **Windows 上 `git clone <本地路径>` 不可用**：`git-upload-pack: command not found`
+  （Git for Windows 的 `cmd/` 下只有 `git-upload-pack.exe`，没有无后缀的 sh 脚本）——
+  连 `--local` 也会调它。所以本仓库**不能用 clone 做本地恢复**，要用 `git --git-dir` 读或直接复制 `objects/refs`。
+- **`os.name` 是可以改的**（module 属性）：改完 reload 即可在 Windows 上模拟 POSIX 分支，
+  本地就能验跨平台逻辑，不必干等 CI。
+  本轮正是靠这个探针抓到了「self 命中就 `break`」导致同目录 `pandaone-mcp` 被漏检的自引入缺陷。
+
 ## [0.7.30.0] - 2026-10-25
 
 真机安装 0.7.28.0 后继续实测，又挖出 2 个真 bug。
