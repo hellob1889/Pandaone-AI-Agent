@@ -83,8 +83,12 @@ def test_backup_with_local_mirror(repo, tmp_path):
     rc = cmd_backup.handler(args)
     assert rc == 0
     assert mirror.is_dir()
-    # 镜像是本地仓库布局（.git/ 子目录）
-    assert (mirror / ".git" / "HEAD").is_file()
+    # 裸仓库布局**跨平台不同**，两种都合法：
+    #   - 标准 bare（`git clone --mirror` 成功时）：<mirror>/HEAD + objects/ + refs/
+    #   - Windows fallback（缺 git-upload-pack 时复制 .git）：<mirror>/.git/HEAD
+    # 真正的不变量是"能被 clone 恢复"，见 test_git_ops.test_mirror_can_be_cloned_back
+    git_dir = mirror if (mirror / "HEAD").is_file() else mirror / ".git"
+    assert (git_dir / "HEAD").is_file()
     assert out.is_file()
 
 
