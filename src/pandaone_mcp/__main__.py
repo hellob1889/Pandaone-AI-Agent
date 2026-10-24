@@ -308,9 +308,43 @@ def _strip_ansi(s: str) -> str:
     """移除 ANSI 转义序列（v0.7.15 fix）。
 
     CLI 输出带 \\x1b[95m 等颜色码，对 LLM 是纯噪音且浪费 token。
+
+    v0.7.31.0 fix: 防御 None / 非字符串输入。
+      - 以前直接 `re.sub(..., s)`，s 为 None 时抛
+        `TypeError: expected string or bytes-like object, got 'NoneType'`。
+      - 触发路径：subprocess 的 reader 线程崩溃时 r.stderr / r.stdout 会是 None
+        （见 _run_cli 的编码修复说明）。
     """
     import re as _re
+    if not s or not isinstance(s, str):
+        return "" if s is None else str(s)
     return _re.compile(r"\x1b\[[0-9;]*[A-Za-z]").sub("", s)
+
+
+def _cli_command() -> list[str]:
+    """构造"调用 CLI"的命令前缀。
+
+    v0.7.29.0: **不再依赖 PATH 里的裸 `pandaone` 命令**。
+
+    为什么必须改（真机实测）：
+      - 旧写法 `subprocess.run(["pandaone", ...])` 靠 PATH 猜命令落点。
+      - Windows PATH = 机器级 + 用户级（机器级在前），pip 版 pandaone
+        常在机器级的 `Python\\Scripts\\` 里 -> MCP 会调到**旧版** CLI，
+        出现"MCP 报 11 个工具、实际跑的是旧版本"这种鬼故事。
+      - 同理，测试环境里只要机器上没装 pip 版 `pandaone`，
+        MCP 工具就整体报 `[WinError 2]`（实测挂 4 例）。
+
+    现在：
+      - frozen 形态 -> 调**同目录**的 pandaone.exe（MCP 与 CLI 必然同版本）；
+      - 源码形态   -> `sys.executable -m pandaone`（不依赖任何外部安装）。
+    """
+    if getattr(sys, "_MEIPASS", None):
+        # frozen: sys.executable 是 pandaone-mcp.exe，同目录必有 pandaone.exe
+        sibling = Path(sys.executable).with_name("pandaone.exe")
+        if sibling.exists():
+            return [str(sibling)]
+        return [sys.executable]
+    return [sys.executable, "-m", "pandaone"]
 
 
 def _run_cli(args, timeout=10):
@@ -320,11 +354,36 @@ def _run_cli(args, timeout=10):
       - 加 `--silent`：跳过 banner + README summary（40+ 行 roadmap 噪音），
         MCP 工具返回应只包含命令结果本身。
       - strip ANSI 转义序列。
+
+    v0.7.31.0 fix（真机实测抓到的真 bug）:
+      症状：MCP tools/call 全部返回 isError=true，stderr 是
+            "expected string or bytes-like object, got 'NoneType'"，
+            且 MCP 进程 stderr 里有
+            "UnicodeDecodeError: 'gbk' codec can't decode byte 0xae"。
+
+      根因：两层编码假设打架 ——
+        1) CLI 子进程输出的是 **UTF-8** 字节（父进程 env 里若带
+           PYTHONIOENCODING=utf-8 就会这样；PyInstaller bootloader 亦然）；
+        2) `subprocess.run(text=True)` 不指定 encoding 时用
+           **系统 locale 编码**解码 —— 中文 Windows 是 GBK；
+        3) GBK 解码器读 UTF-8 字节 → 抛 UnicodeDecodeError →
+           subprocess 内部的 reader 线程直接死掉 →
+           `r.stdout` / `r.stderr` 变成 **None**；
+        4) 后面 `_strip_ansi(None)` → re.sub(pattern, None) → TypeError。
+
+      修法（两端对齐，不再依赖机器 locale）：
+        - 给子进程显式注入 PYTHONIOENCODING=utf-8 → 输出恒为 UTF-8 字节；
+        - 父进程显式 encoding="utf-8", errors="replace" → 永不因解码炸；
+        - _strip_ansi 对 None 做防御（见上）。
     """
     try:
+        env = os.environ.copy()
+        # 只影响 stdio 编码，不动 locale / 不影响 open() 的文件编码
+        env["PYTHONIOENCODING"] = "utf-8"
         r = subprocess.run(
-            ["pandaone", "--silent"] + args,
-            capture_output=True, text=True, timeout=timeout,
+            _cli_command() + ["--silent"] + list(args),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, env=env,
         )
         return {
             "returncode": r.returncode,
@@ -446,8 +505,20 @@ def _handle_request(req: dict) -> dict | None:
 # ============================================================
 def serve_stdio():
     """stdio JSON-RPC 2.0 服务器主循环"""
+    # v0.7.31.0 fix: JSON-RPC over stdio 协议要求 **UTF-8**。
+    #   - 不 reconfigure 时，Windows 上 stdout 用系统 locale（GBK）编码，
+    #     中文响应（ensure_ascii=False）会被写成 GBK 字节，
+    #     而 MCP 客户端按 UTF-8 解 -> 中文全是乱码。
+    #   - stdin 同理：客户端发来的 UTF-8 中文请求被按 GBK 解会炸或乱码。
     try:
-        sys.stdout.reconfigure(line_buffering=True)
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    except Exception:
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 

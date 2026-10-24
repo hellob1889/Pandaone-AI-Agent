@@ -18,7 +18,8 @@ def cmd_install_hook(args):
     if getattr(args, "uninstall", False):
         cmd.append("--uninstall")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=10)
         print(r.stdout, end="")
         if r.stderr:
             print(r.stderr, end="", file=sys.stderr)
@@ -202,7 +203,9 @@ def cmd_ci(args):
     GIT = git_exe_path
     def _git_run(*args, timeout=5):
         try:
-            return subprocess.run([GIT] + list(args), cwd=str(root), capture_output=True, text=True, timeout=timeout)
+            return subprocess.run([GIT] + list(args), cwd=str(root), capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
     if not pandaone_dir.exists():

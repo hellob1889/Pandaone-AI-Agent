@@ -2,6 +2,232 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.31.0] - 2026-10-25
+
+真机回归探针的最后一关卡住：`pandaone_init` 这类 **MCP tools/call 全部返回 isError=true**。
+根因是编码，不是业务逻辑。
+
+### Fixed: MCP 用系统 locale(GBK) 解码子进程的 UTF-8 输出 —— 整条 tools/call 链路瘫掉
+
+**症状**（真机实测，`%LOCALAPPDATA%\Pandaone\pandaone-mcp.exe`）：
+
+```
+tools/call pandaone_init -> {"isError": true,
+    "content": [{"text": "[stderr] expected string or bytes-like object, got 'NoneType'"}]}
+MCP 进程 stderr:
+    UnicodeDecodeError: 'gbk' codec can't decode byte 0xae in position 17
+      File "subprocess.py", line 1599, in _readerthread
+```
+
+**根因链**（四步，每一步都合理，合起来必死）：
+
+| 步 | 发生了什么 |
+|---|---|
+| 1 | CLI 子进程输出的是 **UTF-8** 字节（父进程 env 带 `PYTHONIOENCODING=utf-8` 时必然如此；PyInstaller bootloader 同理） |
+| 2 | `subprocess.run(..., text=True)` **不指定 encoding** -> Python 用**系统 locale 编码**解码 = 中文 Windows 的 **GBK** |
+| 3 | GBK 解码器读 UTF-8 字节 -> `UnicodeDecodeError` -> subprocess 内部 **reader 线程直接死掉** -> `r.stdout` / `r.stderr` 变成 **None** |
+| 4 | `_strip_ansi(None)` -> `re.sub(pattern, None)` -> `TypeError: expected string or bytes-like object, got 'NoneType'` |
+
+**为什么一直没被发现**：源码树跑 `pytest` 时父进程通常不带 `PYTHONIOENCODING`，
+子进程按 locale 输出 GBK、GBK 解 GBK —— 恰好对上了。只有**真机 exe + 特定 env 组合**才炸。
+
+**修复**（两端对齐，从此不依赖机器 locale）：
+
+- `src/pandaone_mcp/__main__.py::_run_cli`
+  - 给子进程显式注入 `PYTHONIOENCODING=utf-8` -> 输出恒为 UTF-8 字节；
+  - 父进程显式 `encoding="utf-8", errors="replace"` -> **任何解码异常都被吞掉**，reader 线程不会再死；
+- `src/pandaone_mcp/__main__.py::_strip_ansi` -> 对 `None` / 非字符串输入做防御，返回 `""` 而不是抛 TypeError；
+- `src/pandaone_mcp/__main__.py::serve_stdio`
+  - `sys.stdout.reconfigure(encoding="utf-8")` —— **MCP over stdio 协议要求 UTF-8**；
+    不切的话 Windows 上 stdout 用 GBK 编码，中文响应会被客户端按 UTF-8 解成乱码；
+  - `sys.stdin.reconfigure(encoding="utf-8", errors="replace")` —— 客户端发来的 UTF-8 中文请求同理。
+
+### Fixed: 全仓 9 处 `subprocess` 捕获输出没显式指定 encoding（同一根因的潜伏点）
+
+MCP 只是第一个爆的。同一类地雷全仓还有 9 处，全部修掉：
+
+| 文件 | 场景 | 风险 |
+|---|---|---|
+| `cli_chunks/part_003.py` (3 处) | `git add` / `git commit` / `git log` | **本轮提交就会踩** —— `git commit -m <中文>` 的回显含中文，UTF-8 字节被 GBK 解 -> `r.stderr.strip()` 触发 AttributeError on None |
+| `cli_chunks/part_005.py` (2 处) | `install_hook` 子模块、`_git_run` | 同上 |
+| `git_installer.py` (3 处) | `git --version`、git 安装过程日志 | git 安装日志含中文 |
+| `pandaone_guard/__main__.py` (1 处) | `git checkout HEAD -- <file>` | 守护进程回滚路径 |
+| `templates/pre-commit-check.py` (1 处) | `git diff --cached` | **L3 审计门禁本身** —— 门禁挂掉 = 审计形同虚设 |
+
+统一改成 `text=True, encoding="utf-8", errors="replace"`。
+`errors="replace"` 是刻意的：解码失败宁可显示乱码，也不能让 reader 线程死掉把返回值变成 None。
+
+### Tests
+
+- 新增 `tests/test_mcp_encoding.py`（11 例）：
+  - `_strip_ansi` 的 None / 空串 / ANSI 剥离 / 中文保留；
+  - `_run_cli` 强制 `encoding="utf-8"` + `errors="replace"` + 子进程 env 注入 `PYTHONIOENCODING=utf-8`；
+  - `_run_cli` 在 stdout/stderr 为 None 时优雅降级（不抛 TypeError）；
+  - `_run_cli` 超时路径；
+  - `_cli_command()` 的 frozen / 源码两种形态；
+  - `serve_stdio` 必须把 stdin/stdout reconfigure 到 UTF-8；
+  - **AST 扫描守卫**：全仓所有 `capture_output=True` 的 subprocess 调用必须显式带 `encoding`
+    —— 防止以后再加一个裸 `text=True` 重演这次事故。
+- 基线：`535 passed, 9 skipped` -> `546 passed, 9 skipped`
+
+### Verified
+
+真机探针（`%LOCALAPPDATA%\Pandaone` 下的真 exe）：
+- `initialize` -> `serverInfo.version = 0.7.31.0`；
+- `tools/list` -> 11 个工具；
+- `tools/call pandaone_init` -> **isError=false**，`.pandaone/` 正常建成；
+- `tools/call pandaone_status` / `pandaone_log` -> **isError=false**。
+
+## [0.7.30.0] - 2026-10-25
+
+真机安装 0.7.28.0 后继续实测，又挖出 2 个真 bug。
+
+### Fixed: MCP 靠 PATH 里的裸 `pandaone` 命令调 CLI —— 两个后果
+
+`src/pandaone_mcp/__main__.py` 原本是 `subprocess.run(["pandaone", "--silent"] + args)`：
+
+1. **产品层面**：Windows PATH = 机器级 + 用户级（机器级在前），pip 版 pandaone 常在机器级的
+   `Python\Scripts\` 里 -> MCP 会调到**旧版** CLI，出现"MCP 报 11 个工具、实际跑的是旧版本"。
+2. **测试层面**：机器上没装 pip 版 `pandaone` 时，MCP 工具整体报 `[WinError 2]`
+   （实测挂 4 例：test_call_init / test_call_write / test_call_install_hook / test_call_fingerprint_update）。
+
+修复：新增 `_cli_command()`，不再靠 PATH 猜：
+- frozen 形态 -> 调**同目录**的 `pandaone.exe`（MCP 与 CLI 必然同版本）；
+- 源码形态 -> `sys.executable -m pandaone`（不依赖任何外部安装）。
+
+### Fixed: `pandaone setup` 的 serve 步骤漏了 frozen 形态感知
+
+`cmd_upgrade.py` 的 `_restart_serve` 在 v0.7.26.0 已经做过形态感知，
+但 `cmd_setup.py` 的 `_step_serve` **漏了** —— frozen 形态下
+`pandaone.exe -m pandaone serve` 会被当成子命令 -> `invalid choice: '-m'`，
+`pandaone setup` 的仪表盘步骤必然失败。同一个坑在 upgrade 修过、setup 没修。
+
+修复：`cmd_setup.py` 新增 `_is_frozen()`，`_step_serve` 按形态构造命令。
+
+### Fixed: 冲突清理漏了 `pandaone-mcp` 入口
+
+`path_conflicts.shadows()` 原本只查 `pandaone` 主命令，漏了**同名**的 `pandaone-mcp.exe`
+（pip 版和 exe 版同名）。实测：装完 exe 版后 `where pandaone-mcp` 仍指向
+`Python\Scripts\pandaone-mcp.exe`（旧版）。
+
+修复：`shadows()` 同时检查 `CONSOLE_SCRIPT_NAMES + MCP_SCRIPT_NAMES`。
+（`pandaone-guard.exe` 连字符 vs exe 版 `pandaone_guard.exe` 下划线 —— 不同名，不冲突。）
+
+### Tests
+
+- `tests/test_cmd_setup_upgrade.py` +5 例：setup serve 的 frozen / 源码两种命令形态、
+  MCP `_cli_command()` 的 frozen / 源码两种形态
+- 基线：`530 passed, 9 skipped` -> `535 passed, 9 skipped`
+
+## [0.7.28.0] - 2026-10-25
+
+### Fixed: 真机安装实测挖出 —— "用户级 PATH 前置" 治不了机器级抢占
+
+v0.7.27.0 把 `%LOCALAPPDATA%\Pandaone` 前置到了**用户级** PATH 首位。真机装完实测：
+
+```
+where pandaone
+  C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Scripts\pandaone.exe   <- pip 版 0.7.21.3
+  C:\Users\Administrator\AppData\Local\Pandaone\pandaone.exe                              <- exe 版 0.7.27.0
+pandaone --version  ->  pandaone v0.7.21.3     <- 仍然是旧版！
+```
+
+**根因**：Windows 的 PATH 拼接规则是 **「机器级 PATH + 用户级 PATH，机器级在前」**。
+`Python311\Scripts` 在**机器级** PATH 里，用户级前置在机制上**够不着**它。
+所以「用户级 PATH 前置」这个方案在真机上根本不成立 —— 必须让机器级那个不再是 `pandaone`。
+
+| 位置 | 改动 |
+|---|---|
+| 新增 `src/pandaone/path_conflicts.py` | 集中实现冲突判定：只读探测，**绝不执行外部 exe、绝不改文件**。`shadows()` 只返回**排在当前运行目录之前**的 pandaone（排在后面的不会被命中） |
+| `src/pandaone/cmd_doctor.py` | 新增 **L8_path_conflict** 检查层（doctor 从 7 层变 8 层），直接点名冲突路径 |
+| `src/pandaone/cmd_doctor.py` | 新增 `doctor --clean-conflicts`：把抢占命令的旧 pandaone **改名备份**（`pandaone.exe` → `pandaone.exe.bak-pandaone-<ver>`） |
+| `src/pandaone/cmd_setup.py` | 新增 `clean_path_conflicts()` + setup 流程里的「PATH 冲突」步骤（`--no-clean-conflicts` 可关） |
+| `src/pandaone/installer/codeaudit.iss` | 安装后自动跑 `doctor --clean-conflicts`（**不能** `skipifsilent` —— 静默安装正是最需要清理的场景） |
+
+**为什么是"改名备份"而不是删除或 `pip uninstall`**：
+- 改名：不碰 pip 的包元数据、不删用户文件、**可逆**（改回去即可）；
+- 删除：不可逆，删错了没法恢复；
+- `pip uninstall`：要机器上有 python + pip，还可能连带影响别的依赖。
+
+### Fixed: 安装器 PATH 前置后的重复项与卸载残留
+
+- `[Registry]` 段改为 `{app};{olddata}`（前置），`[Code]` 段再做一次去重 + 前置兜底（幂等）。
+- 新增 `CurUninstallStepChanged` → `RemoveAppFromPath`：卸载时把 `{app}` 从用户 PATH 摘掉，
+  否则目录被删后 PATH 里留一行坏路径，敲 `pandaone` 会得到"不是内部或外部命令"。
+  **实测**：卸载后 PATH 里 `%LOCALAPPDATA%\Pandaone` 已消失（只剩用户自己的 `pandaone\venv\Scripts`）。
+- 安装后广播 `WM_SETTINGCHANGE`（`SendMessageTimeout`），已打开的终端立刻拿到新 PATH。
+
+### Fixed: mock.Mock 的属性陷阱
+
+`getattr(args, 'clean_conflicts', False)` 在 `args` 是 `mock.Mock()` 时会返回 **truthy 的 Mock 对象**，
+导致 `doctor` 误入清理分支。改为 `is True` 严格判断，并在测试里显式设置该属性。
+
+### Fixed: 脏指纹残留导致大批无关测试连环失败
+
+`~/.pandaone_fp.txt` 是**跨进程的全局状态**，不是测试产物。判定顺序里
+「同版本 + hash 变」= 判篡改 -> CLI 锁死（rc=1），于是：
+
+- 上一次运行留下的记录（版本/hash 与当前源码不符）会让本次运行大批**无关**测试连环失败；
+- 上次跑的是 frozen 形态（`form=frozen`）、这次跑源码形态，版本又相同 → 同样锁死。
+
+实测：改完版本号后第一次全量跑挂了 **32 个**（test_e2e / test_export / test_ci 全军覆没），
+重跑就全绿 —— 纯脏状态问题，不是代码问题。
+
+修复：`tests/conftest.py` 增加 session 级 autouse fixture，在 session 开始时
+把指纹重播种为**当前源码**的正确指纹（`fp_security.save_fp(version, compute_fingerprint())`）。
+只在 session 开始做一次（算指纹要扫整个包目录，per-test 太慢）。
+
+**验证**：故意写入脏指纹（`version=0.7.28.0` + `hash=0*64`，按判定逻辑必然锁死），
+再跑全量 → `530 passed, 9 skipped` 全绿。
+
+### Added
+
+- i18n 词条 `setup_conflict_none` / `setup_conflict_renamed` / `setup_conflict_partial` /
+  `setup_conflict_failed` / `setup_conflict_check_failed`（zh + en）
+- i18n 词条 `_doctor_path_conflict` / `_doctor_path_conflict_hint`（zh + en）
+- doctor 层级文案 7 层 → 8 层
+
+### Tests
+
+- `tests/test_cmd_setup_upgrade.py` +13 例：PATH 前置语义 4 例、安装器模板静态断言 4 例、
+  `path_conflicts` 判定 4 例、`clean_path_conflicts` 改名/可逆/dry-run/无冲突 4 例
+- `tests/test_cmd_doctor.py` +5 例：`--clean-conflicts` 参数解析 2 例、默认不触发 1 例、
+  清理分支执行 1 例、mock 属性陷阱防护 1 例
+- 基线：`513 passed, 9 skipped` → `530 passed, 9 skipped`
+
+## [0.7.27.0] - 2026-10-25
+
+### Fixed: 装完 exe 版却"没生效" —— PATH 被旧 pip 版抢占
+
+真机安装前的环境核查发现（本机实测，非推理）：用户 PATH 里
+`C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Scripts\` 排在靠前，
+其中装着 pip 版 pandaone 0.7.21.3。而安装器把 `%LOCALAPPDATA%\Pandaone` **追加**到 PATH 末尾
+（`{olddata};{app}`），`setup` 命令的 `_persist_path_windows` 同样 `parts.append(...)`。
+
+结果：装完 exe 版后，命令行敲 `pandaone` 仍然命中旧 pip 版 —— 用户体感就是"装了新版没生效"。
+
+| 位置 | 旧行为 | 新行为 |
+|---|---|---|
+| `installer/codeaudit.iss` `[Registry]` | `{olddata};{app}`（追加末尾） | `{app};{olddata}`（**前置**首位） |
+| `installer/codeaudit.iss` `[Code]` | 无 | `CurStepChanged(ssPostInstall)` 做去重 + 前置兜底；`BroadcastEnvChange` 广播 `WM_SETTINGCHANGE`，已打开的终端立刻生效 |
+| `installer/codeaudit.iss` `[Code]` | 无 | `CurUninstallStepChanged` → `RemoveAppFromPath`，卸载时摘掉 `{app}`，不留指向已删目录的坏路径 |
+| `src/pandaone/cmd_setup.py` `_persist_path_windows` | `parts.append(target)` | `parts.insert(0, target)`，并对"已存在但在中间"的做**前移**而非 skip；大小写 / 尾部反斜杠差异按同一条去重 |
+| `src/pandaone/cmd_setup.py` `_persist_path_posix` | 已是前置 `export PATH="{target}:$PATH"` | 不变 —— 这次是把 Windows 侧对齐到 posix 语义 |
+
+跨平台语义原本就不一致：posix 前置、Windows 追加。现在统一为**前置**。
+
+### Added
+
+- i18n 词条 `setup_path_moved`（zh + en，417/417 覆盖）：区分"新增"与"前移"两种结果。
+
+### Tests
+
+- `tests/test_cmd_setup_upgrade.py` +6 例（34 → 40）：
+  - PATH 前置到首位、原有项保留、已存在则前移且不重复、大小写/尾斜杠去重、已在首位则 skip
+  - 安装器模板静态断言：PATH 行必须是 `{app};{olddata}`（防止改回追加）、
+    必须有 `RemoveAppFromPath` / `CurUninstallStepChanged`、必须有 `SendMessageTimeout` 广播
+- 基线：`513 passed, 9 skipped` → `518 passed, 9 skipped`
+
 ## [0.7.26.0] - 2026-10-24
 
 ### Fixed: 「.exe 打包与发布链路验证」沙盒端到端挖出的三个真 bug

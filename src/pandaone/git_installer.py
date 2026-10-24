@@ -199,6 +199,8 @@ def _can_run_git(git_exe: str) -> bool:
             [git_exe, "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         return r.returncode == 0
@@ -221,6 +223,8 @@ def version() -> Optional[str]:
             [git_exe, "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         if result.returncode == 0:
@@ -278,6 +282,8 @@ def _try_run(cmd: List[str], timeout: int = 300, log: List[str] = None) -> subpr
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
         )

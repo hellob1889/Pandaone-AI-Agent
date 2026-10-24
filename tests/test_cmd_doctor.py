@@ -49,6 +49,22 @@ class TestAddDoctorParser:
         args = sub.choices["doctor"].parse_args(["--json"])
         assert args.json is True
 
+    def test_accepts_clean_conflicts_flag(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command")
+        add_doctor_parser(sub)
+        args = sub.choices["doctor"].parse_args(["--clean-conflicts"])
+        assert args.clean_conflicts is True
+
+    def test_clean_conflicts_defaults_false(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command")
+        add_doctor_parser(sub)
+        args = sub.choices["doctor"].parse_args([])
+        assert args.clean_conflicts is False
+
 
 class TestCollectReport:
     def test_report_has_all_keys(self):
@@ -84,11 +100,13 @@ class TestCollectReport:
         assert report["overall_ok"] == expected
 
 
-def _make_args(install_git=False, json_out=False, lang="en"):
+def _make_args(install_git=False, json_out=False, lang="en", clean_conflicts=False):
     args = mock.Mock()
     args.install_git = install_git
     args.json = json_out
     args.lang = lang
+    # 必须显式设置：mock.Mock() 未显式设置的属性访问返回 truthy 的 Mock 对象
+    args.clean_conflicts = clean_conflicts
     return args
 
 
@@ -169,6 +187,22 @@ class TestCmdDoctorInstallGit:
             captured = capsys.readouterr()
         assert "failed" in captured.out or "error" in captured.out.lower()
         assert exit_code == 1
+
+
+class TestCmdDoctorCleanConflicts:
+    def test_clean_conflicts_runs_and_reports(self, capsys):
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=_ok_report()):
+            exit_code = cmd_doctor(_make_args(clean_conflicts=True, json_out=True))
+            captured = capsys.readouterr()
+        assert exit_code == 0
+        assert "clean_conflicts" in captured.out
+
+    def test_clean_conflicts_not_triggered_by_default(self, capsys):
+        """默认不该跑清理分支（mock.Mock 的属性陷阱防护）。"""
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=_ok_report()):
+            cmd_doctor(_make_args(json_out=True))
+            captured = capsys.readouterr()
+        assert "clean_conflicts" not in captured.out
 
 
 class TestPrintHumanReport:

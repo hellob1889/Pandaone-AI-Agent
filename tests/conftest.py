@@ -1,4 +1,4 @@
-﻿"""
+﻿r"""
 conftest.py
 ===========
 pytest 全局配置：自动探测 git 路径并加入 PATH。
@@ -15,6 +15,9 @@ pytest 全局配置：自动探测 git 路径并加入 PATH。
 
 Bug #40 fix (v0.7.10): 不再硬编码 `D:\软件\Git\cmd` 等作者机器路径，
 统一从 git_installer._windows_candidate_dirs() 派生。
+
+v0.7.31.0: 首行改用 raw string（r 前缀 + 三引号）。上面的 `D:\软件\Git\cmd` 含 `\G`
+这类非法转义序列，Python 3.12+ 会抛 DeprecationWarning 并在将来变成 SyntaxError。
 """
 import json
 import os
@@ -95,6 +98,37 @@ def verify_git_available():
     """全局 fixture：测试开始前确认 git 可用，否则 skip"""
     if not shutil.which("git"):
         pytest.skip("git 未安装且未在 PATH 中找到，Pandaone 测试需要 git")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def reseed_fingerprint_for_session():
+    """session 开始时把指纹重播种为**当前源码**的正确指纹。
+
+    第一性原理：
+      - 指纹文件 `~/.pandaone_fp.txt` 是**跨进程的全局状态**，不是测试产物。
+      - 判定顺序里「同版本 + hash 变」= 判篡改 -> CLI 锁死（rc=1）。
+      - 所以上一次运行留下的记录（版本号/hash 与当前源码不符）会让本次运行
+        大批**无关**测试连环失败 —— 实测：改完版本号后第一次全量跑挂了 32 个，
+        第二次就全绿。纯脏状态问题，不是代码问题。
+      - 反过来也一样：上次跑的是 frozen 形态（form=frozen），这次跑源码形态，
+        形态不符虽会自动刷新，但前提是版本也变了；版本相同就是锁死。
+
+    为什么只在 session 开始做一次：
+      - `compute_fingerprint()` 要扫整个包目录做 manifest，per-test 跑太慢。
+      - session 级足以消除「上次运行残留」这一类脏状态。
+
+    副作用说明：
+      - 测完留在用户机器上的记录 = 当前源码版本 + source 形态。
+        这与「用户平时就在源码树里跑 pandaone」的真实状态一致，不算污染。
+      - 指纹文件被清掉也不影响：首次运行会自动重新生成。
+    """
+    try:
+        from pandaone import fp_security as _fpsec
+        from pandaone import __version__ as _ver
+        _fpsec.save_fp(str(_ver), _fpsec.compute_fingerprint())
+    except Exception:
+        # 播种失败不该让整个测试会话挂掉 —— 顶多让个别测试失败
+        pass
 
 
 @pytest.fixture(autouse=True)

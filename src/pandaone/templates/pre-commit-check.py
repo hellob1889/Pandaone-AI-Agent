@@ -124,7 +124,8 @@ def main():
     try:
         r = subprocess.run(
             [_resolve_git_exe(), "diff", "--cached", "--name-only", "--diff-filter=AM"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
+            cwd=str(repo_root), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=10,
         )
         if r.returncode != 0:
             print(t_safe("_hook_git_diff_err", stderr=r.stderr), file=sys.stderr)

@@ -167,6 +167,8 @@ class PandaXHandler(FileSystemEventHandler):
                 cwd=str(self.root),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             return r.returncode == 0

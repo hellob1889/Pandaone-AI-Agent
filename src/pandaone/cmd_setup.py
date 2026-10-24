@@ -126,6 +126,79 @@ def _broadcast_env_change() -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# PATH 冲突清理
+# ---------------------------------------------------------------------------
+
+def _shadow_backup_name(path: Path) -> Path:
+    """冲突 exe 的备份名：pandaone.exe -> pandaone.exe.bak-pandaone-<ver>"""
+    ver = "unknown"
+    try:
+        from pandaone import __version__ as v
+        ver = str(v)
+    except Exception:
+        pass
+    return path.with_name(f"{path.name}.bak-pandaone-{ver}")
+
+
+def clean_path_conflicts(dry_run: bool = False, exclude: str | None = None) -> tuple[str, str]:
+    """把**抢占命令**的旧 pandaone 改名备份，让当前这个版本胜出。
+
+    为什么是"改名"而不是"删除"或"pip uninstall":
+      - 改名：不碰 pip 的包元数据、不删用户文件，**可逆**（改回去即可）；
+      - 删除：不可逆，删错了没法恢复；
+      - pip uninstall：要机器上有 python + pip，还可能连带影响别的依赖。
+
+    前提（实测）：Windows 的 PATH 是「机器级 + 用户级」拼接，机器级在前。
+    用户级 PATH 前置**够不着**机器级的同名命令 —— 只能让那个不再是 pandaone。
+
+    Args:
+        dry_run: 只报告不改动。
+        exclude: "当前运行的这个 pandaone" 的可执行文件路径（内部自动推导）。
+
+    Returns:
+        (状态, 说明文本)，状态 ∈ ok / skip / warn
+    """
+    try:
+        from pandaone import path_conflicts as _pc
+    except Exception as e:
+        return "warn", _t("setup_conflict_check_failed", err=str(e))
+
+    try:
+        shadows = _pc.shadows(exclude)
+    except Exception as e:
+        return "warn", _t("setup_conflict_check_failed", err=str(e))
+
+    if not shadows:
+        return "skip", _t("setup_conflict_none")
+
+    renamed: list[str] = []
+    failed: list[str] = []
+    for s in shadows:
+        src = Path(s)
+        if not src.exists():
+            continue
+        dst = _shadow_backup_name(src)
+        if dst.exists():
+            failed.append(str(src))
+            continue
+        if dry_run:
+            renamed.append(f"{src} -> {dst.name}")
+            continue
+        try:
+            src.rename(dst)
+            renamed.append(f"{src} -> {dst.name}")
+        except Exception:
+            failed.append(str(src))
+
+    if failed and not renamed:
+        return "warn", _t("setup_conflict_failed", paths="; ".join(failed))
+    if failed:
+        return "warn", _t("setup_conflict_partial", done="; ".join(renamed),
+                          failed="; ".join(failed))
+    return "ok", _t("setup_conflict_renamed", paths="; ".join(renamed))
+
+
 def _persist_path_windows(target: str) -> tuple[str, str]:
     import winreg
 
@@ -138,13 +211,22 @@ def _persist_path_windows(target: str) -> tuple[str, str]:
             current = ""
         parts = [p for p in str(current).split(";") if p.strip()]
         norm = target.rstrip("\\/").lower()
-        for p in parts:
-            if p.rstrip("\\/").lower() == norm:
-                return "skip", _t("setup_path_present", target=target)
-        parts.append(target)
+        # 已在最前 —— 无需动
+        if parts and parts[0].rstrip("\\/").lower() == norm:
+            return "skip", _t("setup_path_present", target=target)
+        existed = any(p.rstrip("\\/").lower() == norm for p in parts)
+        # 去掉所有等价项（大小写 / 尾部反斜杠差异，或重复出现多次）
+        parts = [p for p in parts if p.rstrip("\\/").lower() != norm]
+        # v0.7.27.0: **前置**而非追加。
+        #   理由：Windows 上 pip 版 pandaone 装在 Python\Scripts\，通常排在 PATH 靠前。
+        #   追加的话，装完 exe 版后 `pandaone` 仍然命中旧 pip 版 —— 用户体感"装了没生效"。
+        #   posix 分支本来就是前置（export PATH="{target}:$PATH"），这里对齐跨平台语义。
+        parts.insert(0, target)
         new_value = ";".join(parts)
         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_value)
     _broadcast_env_change()
+    if existed:
+        return "ok", _t("setup_path_moved", target=target)
     return "ok", _t("setup_path_added", target=target)
 
 
@@ -299,6 +381,11 @@ def _port_open(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
 
 
+def _is_frozen() -> bool:
+    """当前是否运行在 PyInstaller 打包形态（.exe）。"""
+    return bool(getattr(sys, "_MEIPASS", None))
+
+
 def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
     """后台启动仪表盘并打印本地访问地址。"""
     host = "127.0.0.1"
@@ -308,7 +395,14 @@ def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
         port = _find_free_port()
     except Exception:
         port = 8765
-    cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
+    # v0.7.29.0: 形态感知 —— 与 cmd_upgrade._restart_serve 同一个坑。
+    #   frozen 形态下 sys.executable 就是 pandaone.exe 本身，
+    #   `pandaone.exe -m pandaone serve` 会被当成子命令 -> "invalid choice: '-m'"。
+    #   （v0.7.26.0 只在 upgrade 里修了，setup 这条路漏了，一直没被发现。）
+    if _is_frozen():
+        cmd = [sys.executable, "serve", "--root", str(root)]
+    else:
+        cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
     kwargs = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = (
@@ -370,6 +464,11 @@ def add_parser(sub) -> None:
     p.add_argument("--skip-context", action="store_true", help="不注册右键菜单")
     p.add_argument("--skip-serve", action="store_true", help="不启动仪表盘")
     p.add_argument(
+        "--no-clean-conflicts",
+        action="store_true",
+        help="不清理 PATH 里抢占命令的旧版 pandaone（默认会改名备份）",
+    )
+    p.add_argument(
         "--min-python",
         default="3.8",
         help="最低 Python 版本要求（默认 3.8，与 pyproject requires-python 一致）",
@@ -393,6 +492,10 @@ def handler(args) -> int:
         ("git 仓库", lambda: _step_git_repo(root)),
         ("Pandaone init", lambda: _step_init(root)),
     ]
+    # PATH 冲突清理：机器级 PATH 里的旧 pip 版会抢占 `pandaone` 命令，
+    # 光靠"用户级 PATH 前置"解决不了（实测），只能把旧的改名备份。
+    if not getattr(args, "no_clean_conflicts", False):
+        steps.append(("PATH 冲突", lambda: clean_path_conflicts()))
     if not getattr(args, "skip_watch", False):
         steps.append(("看门狗", lambda: _step_watch(root)))
     if not getattr(args, "skip_context", False):

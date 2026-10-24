@@ -87,6 +87,47 @@ subprocess.run(cmd, capture_output=True, text=True,
                encoding="utf-8", errors="replace")   # ← 两个都要
 ```
 
+### 附带两条：反过来的坑更隐蔽 —— UTF-8 输出被 GBK 解码
+
+v0.7.31.0 的真机事故就是这个。上面那条说的是"GBK 工具输出"，
+但**反方向同样致命**，而且更隐蔽：
+
+| 子进程输出 | 父进程 locale | 裸 `text=True` 的结果 |
+|---|---|---|
+| GBK（`taskkill`） | GBK | 恰好对上了，没事 |
+| **UTF-8**（`git`、Python CLI、PyInstaller bootloader） | GBK | **炸** |
+
+炸的方式很特别 —— 不是抛异常，而是**静默地把返回值变成 None**：
+
+```
+UnicodeDecodeError: 'gbk' codec can't decode byte 0xae ...
+  File "subprocess.py", line 1599, in _readerthread
+```
+
+`subprocess` 内部用**独立 reader 线程**读管道。这个线程一死，
+`r.stdout` / `r.stderr` 就变成 `None`（不是空串！）。
+于是下游 `r.stderr.strip()` -> `AttributeError: 'NoneType' object has no attribute 'strip'`，
+`re.sub(pattern, None)` -> `TypeError: expected string or bytes-like object, got 'NoneType'`。
+
+**症状离病根十万八千里**：v0.7.31.0 之前，git 输出 UTF-8、locale 恰好是 GBK 的机器上
+`git commit` 会突然 AttributeError；而在 locale 恰好是 UTF-8 的机器上一切正常 ——
+**同一个包，不同机器不同命**。
+
+铁律（v0.7.31.0 起全仓强制，`tests/test_mcp_encoding.py` 有 AST 守卫）：
+
+```python
+# 捕获输出的 subprocess 调用，必须同时给 encoding + errors
+subprocess.run(cmd, capture_output=True, text=True,
+               encoding="utf-8", errors="replace")
+```
+
+- `encoding="utf-8"`：git / Python CLI / bootloader 都是 UTF-8 事实标准；
+- `errors="replace"`：**刻意的** —— 解码失败宁可显示乱码，也不能让 reader 线程死掉。
+- 不捕获输出（`Popen` 不传 `stdout=`）时**不受影响**：字节直接继承父进程 fd，不经过解码器。
+
+配套：MCP over stdio 协议要求 UTF-8，`serve_stdio` 必须
+`sys.stdout.reconfigure(encoding="utf-8")` + `sys.stdin.reconfigure(encoding="utf-8", errors="replace")`。
+
 ---
 
 ## 2. 指纹（L5 自校验）与开发期
@@ -268,3 +309,41 @@ dist\pandaone\pandaone.exe --version    # 必须是刚抬的版本号
 
 如果 `--version` 显示的还是旧版本，说明 `build/_build_info.py` 没重新注入，
 后面所有验证都是白做。
+
+### 7.6 Windows PATH 拼接规则：机器级在前，用户级前置够不着它
+
+**这是 v0.7.27.0 那次修复被真机证伪的原因**，写在这里别再踩第二次。
+
+Windows 解析一个命令时，实际搜索路径是：
+
+```
+机器级 PATH（HKLM\...\Environment\Path）  +  用户级 PATH（HKCU\...\Environment\Path）
+```
+
+**机器级在前**。也就是说：
+
+- pip 装的 `pandaone.exe` 在 `C:\Program Files\Python311\Scripts\`（机器级）
+- exe 装的是 `%LOCALAPPDATA%\Pandaone\pandaone.exe`（用户级）
+- 就算你把用户级 PATH 的 `%LOCALAPPDATA%\Pandaone` 顶到**用户级第一位**，
+  **依然排在机器级那个后面** -> `where pandaone` 第一个命中的还是 pip 旧版。
+
+所以"用户级 PATH 前置"这个手段**在机制上治不了机器级抢占**。
+真正可靠的做法只有两条：
+
+1. **改名备份**机器级那个（`pandaone.exe` -> `pandaone.exe.bak-pandaone-<ver>`）——
+   可逆、不碰 pip 元数据、不删文件（本项目 v0.7.28.0 走的就是这条）；
+2. **所有内部调用不靠 PATH 猜命令落点** —— 显式用同目录绝对路径
+   （v0.7.29.0 的 `_cli_command()` 走的就是这条）。
+
+推论：**改了 PATH 之后，已经打开的进程不会刷新 PATH**（Windows 限制）。
+改名备份方案会让旧终端拿不到 `pandaone` —— 这不是 bug，是设计取舍，
+新开终端即可。
+
+### 7.7 卸载必须把自己从 PATH 里摘干净
+
+安装器写了 PATH，卸载器就得擦掉。否则用户卸载后 PATH 里还挂着一个
+指向已删目录的条目 -> 每次敲 `pandaone` 都报"不是内部或外部命令"。
+
+Inno Setup 里靠 `{olddata}` 记住安装前的 Path 值，卸载时还原；
+自己额外写入的条目需要在 `CurUninstallStepChanged` 里显式摘除。
+v0.7.27.0 补上了这条，真机实测：卸载后 PATH 里 `%LOCALAPPDATA%\Pandaone` 已消失。

@@ -155,11 +155,22 @@ Root: HKCU; Subkey: "Software\Classes\*\shell\PandaoneWatch"; Flags: deletekey
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\PandaoneInit"; Flags: deletekey
 
 ; PATH（用户级，不需要管理员）
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
+; v0.7.27.0: **前置** {app}，不再追加到末尾。
+;   旧写法 `{olddata};{app}` 会让 pip 版 pandaone（Python\Scripts\，通常更靠前）
+;   继续抢占 `pandaone` 命令 -> 装完 exe 版却像"没生效"。
+;   {olddata} 保留 -> 卸载时 Inno 能把 Path 恢复成安装前的值。
+;   去重 + 幂等由 [Code] 的 CurStepChanged(ssPostInstall) 兜底。
+Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{app};{olddata}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
 
 [Run]
 ; 安装后首次运行探测
 Filename: "{app}\{#MyAppExeName}"; Parameters: "install-git --probe-only"; Description: "Probe git availability"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser
+; v0.7.28.0: 清理 PATH 里抢占命令的旧版 pandaone。
+;   背景（真机实测）：Windows PATH = 机器级 + 用户级（机器级在前），
+;   pip 版 pandaone 在 Python\Scripts\（机器级）时，用户级前置**够不着**它，
+;   装完 exe 版敲 pandaone 仍是旧版 —— 只能把旧的改名备份。
+;   注意：**不能**加 skipifsilent —— 静默安装正是最需要清理的场景。
+Filename: "{app}\{#MyAppExeName}"; Parameters: "doctor --clean-conflicts"; Description: "Rename older pandaone binaries shadowing the command"; Flags: runmaximized nowait postinstall runascurrentuser
 Filename: "{app}\{#MyAppExeName}"; Parameters: "install-mcp --client auto --absolute-command"; Description: "Register Pandaone MCP server in detected IDE configs"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser; Tasks: installmcp
 
 [UninstallRun]
@@ -188,11 +199,129 @@ begin
   Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
+// v0.7.27.0: 广播环境变量变更（WM_SETTINGCHANGE / "Environment"）
+//   目的：装完后**已经打开**的终端也能立刻拿到新 PATH，不用重开。
+//   参考 cmd_setup.py 的 _broadcast_env_change()（同一条 Win32 消息）。
+//   注意：Inno Pascal Script 只认基础整数类型（LongWord/LongInt）和 String，
+//   WPARAM/LPARAM/LRESULT/Cardinal/PChar 在 Inno 6 里都未定义，会报 "Unknown type"。
+//   Inno 的 String 本身就是 null-terminated AnsiString，可以直接当 PChar 传。
+function SendMessageTimeout(hWnd: LongWord; Msg: LongWord; wParam: LongWord;
+  lParam: String; fuFlags: LongWord; uTimeout: LongWord;
+  var lpdwResult: LongInt): LongInt;
+  external 'SendMessageTimeoutA@user32.dll stdcall';
+
+procedure BroadcastEnvChange;
+var
+  Dummy: LongInt;
 begin
-  // 在 Inno Setup 6 中，PyInstaller 产物需要平铺到 {app}
-  // 这里假设 build.bat 已经把 dist/pandaone/* 复制到 installer/staging/pandaone/
-  // 实际用 [Files] 段的 Source 指向 ..\dist\pandaone\ 即可
+  // HWND_BROADCAST = $FFFF，SMTO_ABORTIFHUNG = 2
+  SendMessageTimeout(LongWord($FFFF), $001A, 0, 'Environment', 2, 5000, Dummy);
+end;
+
+// 从用户 PATH 里移除 {app}（卸载时用）
+procedure RemoveAppFromPath;
+var
+  OrigPath, NewPath, Item, AppPath: string;
+  I, J: Integer;
+  Changed: Boolean;
+begin
+  AppPath := ExpandConstant('{app}');
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+    Exit;
+
+  NewPath := '';
+  Changed := False;
+  I := 1;
+  while I <= Length(OrigPath) do
+  begin
+    J := Pos(';', Copy(OrigPath, I, MaxInt));
+    if J = 0 then
+    begin
+      Item := Copy(OrigPath, I, MaxInt);
+      I := Length(OrigPath) + 1;
+    end
+    else
+    begin
+      Item := Copy(OrigPath, I, J - 1);
+      I := I + J;
+    end;
+    Item := Trim(Item);
+    if Item = '' then
+      Continue;
+    if CompareText(Item, AppPath) = 0 then
+    begin
+      Changed := True;
+      Continue;
+    end;
+    if NewPath = '' then
+      NewPath := Item
+    else
+      NewPath := NewPath + ';' + Item;
+  end;
+
+  if not Changed then
+    Exit;
+
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', NewPath);
+  BroadcastEnvChange;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  // 卸载时把 {app} 从用户 PATH 摘掉 —— 否则目录被删后 PATH 里留一行坏路径，
+  // 用户敲 `pandaone` 会得到"不是内部或外部命令"。
+  if CurUninstallStep = usUninstall then
+    RemoveAppFromPath;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  OrigPath, NewPath, Item, AppPath: string;
+  I, J: Integer;
+begin
+  if (CurStep <> ssPostInstall) or (not WizardIsTaskSelected('addtopath')) then
+    Exit;
+
+  // v0.7.27.0: PATH **前置**而非追加。
+  //   背景：pip 版 pandaone 装在 Python\Scripts\，通常排在用户 PATH 靠前。
+  //   旧写法 `{olddata};{app}` 追加到末尾 —— 装完 exe 版后 `pandaone` 仍然
+  //   命中旧 pip 版，用户体感就是"装了新版没生效"。
+  //   同时做去重：{app} 已存在时先摘掉再前置，避免出现两行。
+  AppPath := ExpandConstant('{app}');
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', OrigPath) then
+    OrigPath := '';
+
+  NewPath := '';
+  I := 1;
+  while I <= Length(OrigPath) do
+  begin
+    J := Pos(';', Copy(OrigPath, I, MaxInt));
+    if J = 0 then
+    begin
+      Item := Copy(OrigPath, I, MaxInt);
+      I := Length(OrigPath) + 1;
+    end
+    else
+    begin
+      Item := Copy(OrigPath, I, J - 1);
+      I := I + J;
+    end;
+    Item := Trim(Item);
+    if (Item = '') or (CompareText(Item, AppPath) = 0) then
+      Continue;
+    if NewPath = '' then
+      NewPath := Item
+    else
+      NewPath := NewPath + ';' + Item;
+  end;
+
+  if NewPath = '' then
+    NewPath := AppPath
+  else
+    NewPath := AppPath + ';' + NewPath;
+
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', NewPath);
+  BroadcastEnvChange;
 end;
 
 function InitializeSetup: boolean;
