@@ -33,11 +33,21 @@ import shutil as _shutil
 import sys as _sys
 from pathlib import Path as _Path
 
-#: Windows 上可能充当 `pandaone` 命令的入口
-CONSOLE_SCRIPT_NAMES = ("pandaone.exe", "pandaone.cmd", "pandaone.bat")
-
-#: MCP server 的入口（名字不同，通常不冲突，但一起报出来更完整）
-MCP_SCRIPT_NAMES = ("pandaone-mcp.exe", "pandaone-mcp.cmd", "pandaone-mcp.bat")
+#: 可能充当 `pandaone` 命令的入口（**按平台区分**）
+#:
+#: Windows：pip/setuptools 生成 `pandaone.exe`（外加 `.cmd` / `.bat` 包装）
+#: POSIX ：生成的是**无扩展名**的可执行脚本 `pandaone`
+#:
+#: v0.7.31.0 之前这里只列了 Windows 后缀 -> 在 Linux/macOS 上
+#: `find_all()` / `shadows()` 恒返回空，"PATH 抢占"检测**整个静默失效**
+#: （不报错、不崩，只是永远说"没有冲突"）—— 是 Ubuntu CI 上 4 个用例
+#: 变红才把它挖出来的。跨平台清单必须跟着平台走，不能写死一种后缀。
+if _os.name == "nt":
+    CONSOLE_SCRIPT_NAMES = ("pandaone.exe", "pandaone.cmd", "pandaone.bat")
+    MCP_SCRIPT_NAMES = ("pandaone-mcp.exe", "pandaone-mcp.cmd", "pandaone-mcp.bat")
+else:
+    CONSOLE_SCRIPT_NAMES = ("pandaone",)
+    MCP_SCRIPT_NAMES = ("pandaone-mcp",)
 
 
 def _norm(path: str) -> str:
@@ -78,15 +88,22 @@ def find_all(exclude: str | None = None) -> list[str]:
     for d in _path_entries():
         if not _os.path.isdir(d):
             continue
+        # 同一目录只取**第一个命中的名字**（优先级按常量顺序）：
+        # 否则 pip 装的 `pandaone.exe` + 别的包装 `pandaone.cmd` 会被数成两处冲突。
         for name in CONSOLE_SCRIPT_NAMES + MCP_SCRIPT_NAMES:
             p = _os.path.join(d, name)
             if not _os.path.isfile(p):
                 continue
             k = _norm(p)
-            if k in seen or (self_key and k == self_key):
+            if k in seen:
+                break
+            if self_key and k == self_key:
+                # 这是"当前运行的自己" —— 跳过它，但**继续**看同目录的其它入口
+                # （例如同目录里还有 pandaone-mcp，它照样是冲突）。
                 continue
             seen.add(k)
             hits.append(p)
+            break
     return hits
 
 
@@ -122,6 +139,7 @@ def shadows(exclude: str | None = None) -> list[str]:
             p = _os.path.join(d, name)
             if _os.path.isfile(p):
                 out.append(p)
+                break
     return out
 
 
