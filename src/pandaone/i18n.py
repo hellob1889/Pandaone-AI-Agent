@@ -156,6 +156,8 @@ TRANSLATIONS = {
         "mcp_verify_cmd_mismatch": "自检失败：command 不匹配（当前 {got}）",
         "mcp_dry_run_done": "dry-run 结束，未写入任何文件",
         "mcp_restart_hint": "提示: 请重启 IDE / AI 客户端以加载新的 MCP 配置。",
+        "mcp_command_frozen": "打包形态: 已锁定同目录的 pandaone-mcp 绝对路径（避免 PATH 命中旧版）",
+        "mcp_ide_detected": "检测到已安装 {client}，将创建配置: {path}",
 
         # ============ init ============
         "ok_initialized": "[OK] 已初始化: {path}",
@@ -641,6 +643,8 @@ TRANSLATIONS = {
         "mcp_verify_cmd_mismatch": "self-check failed: command mismatch (current {got})",
         "mcp_dry_run_done": "dry-run finished, nothing written",
         "mcp_restart_hint": "Note: restart your IDE / AI client to pick up the new MCP configuration.",
+        "mcp_command_frozen": "Frozen build: pinned the sibling pandaone-mcp absolute path (avoids a stale PATH hit)",
+        "mcp_ide_detected": "Detected installed IDE {client}, will create config: {path}",
 
         # ============ init ============
         "ok_initialized": "[OK] Initialized: {path}",

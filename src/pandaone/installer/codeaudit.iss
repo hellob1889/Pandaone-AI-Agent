@@ -160,7 +160,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 [Run]
 ; 安装后首次运行探测
 Filename: "{app}\{#MyAppExeName}"; Parameters: "install-git --probe-only"; Description: "Probe git availability"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser
-Filename: "{app}\{#MyAppExeName}"; Parameters: "install-mcp --client auto"; Description: "Register Pandaone MCP server in detected IDE configs"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser; Tasks: installmcp
+Filename: "{app}\{#MyAppExeName}"; Parameters: "install-mcp --client auto --absolute-command"; Description: "Register Pandaone MCP server in detected IDE configs"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser; Tasks: installmcp
 
 [UninstallRun]
 ; 卸载时清理用户配置（仅 fingerprint）

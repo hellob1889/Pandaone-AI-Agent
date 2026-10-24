@@ -214,5 +214,78 @@ def test_command_is_registered():
     assert cli.COMMANDS["install-mcp"] is mcp.handler
 
 
+# ---------------------------------------------------------------------------
+# v0.7.25.0 回归：沙盒端到端挖出的两个真 bug
+#   1) 既有 pandaone 条目里的 env 被整条替换清空（用户数据丢失）
+#   2) 打包形态下写进配置的 command 是裸名，PATH 命中旧版 MCP（版本错配）
+# ---------------------------------------------------------------------------
+
+def test_install_into_merges_existing_env(tmp_path):
+    """既有 pandaone 条目里的 env 必须保留（只补不缺，不删已有键）。"""
+    path = tmp_path / "mcp.json"
+    path.write_text(json.dumps({"mcpServers": {"pandaone": {
+        "command": "old-cmd", "env": {"KEEP_ME": "1", "API_KEY": "secret"}}}}),
+        encoding="utf-8")
+    result = mcp.install_into(path, "pandaone-mcp")
+    assert result["updated"] is True
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["pandaone"]
+    assert entry["env"]["KEEP_ME"] == "1"
+    assert entry["env"]["API_KEY"] == "secret"
+    assert entry["command"] == "pandaone-mcp"   # command 照旧更新
+
+
+def test_install_into_preserves_existing_args(tmp_path):
+    path = tmp_path / "mcp.json"
+    path.write_text(json.dumps({"mcpServers": {"pandaone": {
+        "command": "old-cmd", "args": ["--flag", "value"]}}}), encoding="utf-8")
+    mcp.install_into(path, "pandaone-mcp")
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["pandaone"]
+    assert entry["args"] == ["--flag", "value"]
+
+
+def test_resolve_command_prefers_sibling_exe_in_frozen_build(monkeypatch, tmp_path):
+    """打包形态：即便 PATH 里有旧的 pandaone-mcp，也必须锁同目录的绝对路径。"""
+    sibling = tmp_path / "pandaone-mcp.exe"
+    sibling.write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "pandaone.exe"))
+    monkeypatch.setattr(mcp.shutil, "which", lambda n: r"C:\old\Scripts\pandaone-mcp.exe")
+    cmd, fell_back = mcp.resolve_command(False)
+    assert Path(cmd) == sibling.resolve()
+    assert Path(cmd).is_absolute()
+    assert fell_back is True
+
+
+def test_resolve_command_absolute_flag_does_not_consult_path(monkeypatch, tmp_path):
+    """绝对路径模式不应该去查 PATH —— 否则会锁到旧版 MCP。"""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    calls = []
+
+    def _which(name):
+        calls.append(name)
+        return r"C:\old\Scripts\pandaone-mcp.exe"
+
+    monkeypatch.setattr(mcp.shutil, "which", _which)
+    mcp.resolve_command(True)
+    assert calls == [], "absolute mode must not consult PATH"
+    mcp.resolve_command(False)
+    assert calls == ["pandaone-mcp"], "normal mode should consult PATH"
+
+
+def test_auto_registers_installed_ide_without_existing_config(tmp_path, monkeypatch):
+    """装了 IDE 但还没配置文件时，--client auto 也要把配置建出来。"""
+    target = tmp_path / "cursor" / "mcp.json"
+    monkeypatch.setattr(mcp, "candidate_configs", lambda: {"cursor": target})
+    monkeypatch.setattr(mcp, "_ide_installed", lambda name: name == "cursor")
+    monkeypatch.setattr(mcp, "resolve_command", lambda absolute=False: ("pandaone-mcp", False))
+    args = SimpleNamespace(client="auto", dry_run=False, no_backup=False, absolute_command=False)
+    rc = mcp.handler(args)
+    assert rc == 0
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert "pandaone" in data["mcpServers"]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

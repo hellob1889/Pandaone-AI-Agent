@@ -2,6 +2,34 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.25.0] - 2026-10-24
+
+### Fixed: 「安装后自动注册 MCP」沙盒端到端挖出的两个真 bug
+
+用**真正要装的那份 frozen exe**（`dist/pandaone/pandaone.exe` == 装完的 `{app}\pandaone.exe`）
+在沙盒里跑完整链路（重定向 `APPDATA` / `HOME` 隔离真实 IDE 配置 → 注册 → 读回 → 用配置里写的
+那个 command 真握手），实测挖出两个此前单测盖不到的 bug：
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| 1 | 既有 `mcpServers.pandaone` 条目里用户自己配的 `env`（可能带 API key / `PANDAONE_FP_PASSWORD`）和 `args` 被**整条替换清空** | `install_into()` 里 `servers[SERVER_KEY] = new_entry` 无条件整条覆盖 | 条目照旧更新（command 指向新解析的可执行文件），但 `env`/`args` 改为**合并**——只补缺失键，不删已有键 |
+| 2 | 打包形态下写进 IDE 配置的 command 是裸名 `pandaone-mcp`，IDE 启动时 PATH 命中 **pip 装的旧版**（实测握手 `serverInfo.version = 0.7.21.3`，与新装的 0.7.25.0 不符） | `resolve_command()` 先问 `shutil.which()`，而 PATH 里残留着旧版 | frozen 形态**优先锁同目录的绝对路径**；`--absolute-command` 显式绝对模式；安装包任务改为 `install-mcp --client auto --absolute-command` |
+
+### Added: `--client auto` 现在能识别「装了 IDE 但还没配置文件」
+
+原先 `auto` 只认「配置文件已存在」，于是装了 Cursor / Trae 但从没建过 `mcp.json` 的用户
+根本注册不到 —— 「装完即用」在这一环断掉。现在补上 IDE 安装目录探测（Claude / Cursor /
+Trae / Windsurf），装了就把配置建出来（仍然先备份、损坏 JSON 绝不覆盖）。
+
+### Test
+
+沙盒端到端 12 项断言全过：注册成功、其他 server 保留、既有 env 保留、损坏 JSON 未被覆盖、
+备份已生成、配置里写出的 command 能真的握手并返回 **11 个工具**、`serverInfo.version`
+与安装的版本一致。
+
+新增 5 个用例（`tests/test_cmd_install_mcp.py`）：env 合并、args 保留、frozen 优先同目录
+绝对路径、绝对模式不查 PATH、auto 识别已安装 IDE。
+
 ## [0.7.24.0] - 2026-10-24
 
 ### Added: 一键部署 / 升级 / 备份 / MCP 注册（对应《建议书》产品建议 1.1–1.5 + 历史欠账项）

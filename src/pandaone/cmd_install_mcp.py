@@ -75,6 +75,32 @@ def candidate_configs() -> dict[str, Path]:
     }
 
 
+def _ide_installed(name: str) -> bool:
+    """粗略探测某个 IDE 是否装了（用于 --client auto）。
+
+    为什么需要：``--client auto`` 原本只看「配置文件是否已存在」，
+    但装了 Cursor / Trae 的新用户往往还没建过 mcp.json —— 那一环断掉，
+    "装完即用"就落空了。这里补上「IDE 已安装但还没配置文件」的判定。
+    """
+    appdata = _appdata()
+    local = Path(os.environ.get("LOCALAPPDATA") or appdata.parent / "Local")
+    home = Path.home()
+    candidates = {
+        "claude": [appdata / "Claude", local / "AnthropicClaude",
+                   local / "Programs" / "Claude"],
+        "cursor": [local / "Programs" / "cursor", home / ".cursor"],
+        "trae": [appdata / "Trae", local / "Programs" / "Trae"],
+        "windsurf": [local / "Programs" / "Windsurf",
+                     home / ".codeium" / "windsurf"],
+    }
+    return any(p.exists() for p in candidates.get(name, []))
+
+
+def _is_frozen() -> bool:
+    """是否运行在 PyInstaller 打包形态（frozen / .exe 安装）。"""
+    return bool(getattr(sys, "frozen", False)) or hasattr(sys, "_MEIPASS")
+
+
 def resolve_command(use_absolute: bool = False) -> tuple[str, bool]:
     """决定 MCP 配置里写的 command。
 
@@ -82,6 +108,13 @@ def resolve_command(use_absolute: bool = False) -> tuple[str, bool]:
         (command, 是否因为 PATH 里找不到而回退到绝对路径)
     """
     name = "pandaone-mcp"
+    # 打包形态（frozen / .exe 安装）：用户刚装的就是 exe 旁边那一个。
+    # 必须优先锁绝对路径 —— 否则 PATH 里若还留着 pip 装的旧版，IDE 会启动旧版 MCP
+    # （实测 serverInfo.version 0.7.21.3，与新装的 0.7.25.0 不符）。
+    if _is_frozen():
+        sibling = Path(sys.executable).resolve().parent / (name + ".exe")
+        if sibling.is_file():
+            return str(sibling), True
     if not use_absolute and shutil.which(name):
         return name, False
     # PATH 里找不到 → 用绝对路径，否则 IDE 启动时根本找不到这个可执行文件
@@ -156,6 +189,18 @@ def install_into(
     result["others"] = len([k for k in servers if k != SERVER_KEY])
     existing = servers.get(SERVER_KEY)
     new_entry = {"command": command, "env": {}}
+
+    if isinstance(existing, dict):
+        # —— 只合并不覆盖 ——
+        # pandaone 条目本身要更新（command 指向本次解析出来的可执行文件），
+        # 但用户在这条里配的 env（可能带 API key / PANDAONE_FP_PASSWORD）和 args
+        # 是用户资产，不能被整条替换悄悄清空 —— 只补缺失键，不删已有键。
+        merged_env = dict(existing.get("env") or {})
+        merged_env.update(new_entry["env"])
+        new_entry["env"] = merged_env
+        if isinstance(existing.get("args"), list):
+            new_entry["args"] = list(existing["args"])
+
     if existing == new_entry:
         result["updated"] = False
         return result
@@ -229,12 +274,19 @@ def handler(args) -> int:
     command, fell_back = resolve_command(bool(getattr(args, "absolute_command", False)))
 
     print(_t("mcp_header", command=command))
-    if fell_back:
+    if _is_frozen():
+        print(_t("mcp_command_frozen"))
+    elif fell_back:
         print(_t("mcp_command_fallback"))
 
     candidates = candidate_configs()
     if client == "auto":
         targets = {k: v for k, v in candidates.items() if v.is_file()}
+        # 装了 IDE 但还没配置文件 -> 也算目标（否则"装完即用"在这一环断掉）
+        for k, v in candidates.items():
+            if k not in targets and _ide_installed(k):
+                targets[k] = v
+                print(_t("mcp_ide_detected", client=k, path=str(v)))
         if not targets:
             print(_t("mcp_no_client_found"))
             for name, path in candidates.items():
