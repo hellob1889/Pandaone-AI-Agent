@@ -168,10 +168,13 @@ def test_create_mirror(repo, tmp_path):
     dest = tmp_path / "mirror.git"
     target = git_ops.create_mirror(repo, dest)
     assert target.is_dir()
-    # 镜像是本地仓库布局（.git/ 子目录），信息完整（含 objects / refs / logs）
-    assert (target / ".git" / "HEAD").is_file()
-    assert (target / ".git" / "objects").is_dir()
-    assert (target / ".git" / "refs").is_dir()
+    # 裸仓库布局**跨平台不同**，两种都合法：
+    #   - 标准 bare（`git clone --mirror` 成功时）：<mirror>/HEAD + objects/ + refs/
+    #   - Windows fallback（缺 git-upload-pack 时复制 .git）：<mirror>/.git/HEAD
+    git_dir = target if (target / "HEAD").is_file() else target / ".git"
+    assert (git_dir / "HEAD").is_file()
+    assert (git_dir / "objects").is_dir()
+    assert (git_dir / "refs").is_dir()
     # 零传输验证：git 能直接读出镜像里的历史（不经过任何传输层）
     head = git_ops.run_git(["rev-parse", "HEAD"], cwd=target).stdout.strip()
     src_head = git_ops.run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
@@ -180,6 +183,63 @@ def test_create_mirror(repo, tmp_path):
     n_mirror = git_ops.run_git(["rev-list", "--count", "HEAD"], cwd=target).stdout.strip()
     n_src = git_ops.run_git(["rev-list", "--count", "HEAD"], cwd=repo).stdout.strip()
     assert n_mirror == n_src
+
+
+@needs_git
+def test_mirror_is_offline_readable_and_complete(repo, tmp_path):
+    """镜像的真正契约：**不依赖任何传输层**就能读出完整历史。
+
+    这里刻意**不用** `git clone` 来验证：
+      Windows 上 `git clone <本地路径>` 会调 `git-upload-pack`，
+      而 Git for Windows 的 `cmd/` 下只有 `git-upload-pack.exe`、
+      没有无后缀的 sh 脚本 -> 必挂（实测 rc=128）。
+      那测的是 git 的环境，不是我们的备份。
+
+    真正的三件事：
+      1. 离线可读（`git --git-dir=<mirror>` 直接读）；
+      2. 内容完整（提交数与源一致）；
+      3. 能原样复制成另一个仓库（`git clone --local` 干的就是这件事）。
+    """
+    import shutil
+
+    dest = tmp_path / "m.git"
+    target = git_ops.create_mirror(repo, dest)
+    git_dir = target if (target / "HEAD").is_file() else target / ".git"
+    src_head = git_ops.run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # 1) offline read -- no transport layer involved
+    head = git_ops.run_git(
+        ["--git-dir", str(git_dir), "rev-parse", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+    assert head == src_head
+
+    # 2) content complete
+    n_mirror = git_ops.run_git(
+        ["--git-dir", str(git_dir), "rev-list", "--count", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+    n_src = git_ops.run_git(["rev-list", "--count", "HEAD"], cwd=repo).stdout.strip()
+    assert n_mirror == n_src
+
+    # 3) can be copied verbatim into a fresh repository
+    restored = tmp_path / "restored.git"
+    git_ops.run_git(["init", "--bare", "--quiet", str(restored)], cwd=tmp_path)
+    for name in ("objects", "refs", "packed-refs", "HEAD"):
+        s = git_dir / name
+        if not s.exists():
+            continue
+        d = restored / name
+        if s.is_dir():
+            shutil.copytree(s, d, dirs_exist_ok=True)
+        else:
+            shutil.copy2(s, d)
+    r_head = git_ops.run_git(
+        ["--git-dir", str(restored), "rev-parse", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+    assert r_head == src_head
+    r_count = git_ops.run_git(
+        ["--git-dir", str(restored), "rev-list", "--count", "HEAD"], cwd=tmp_path
+    ).stdout.strip()
+    assert r_count == n_src
 
 
 @needs_git
