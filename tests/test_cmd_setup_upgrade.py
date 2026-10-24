@@ -591,8 +591,19 @@ def test_iss_runs_conflict_cleanup_after_install():
 # path_conflicts: PATH 抢占检测
 # ---------------------------------------------------------------------------
 
+#: Entry file names produced by pip/setuptools on each platform.
+#: Windows: suffixed (pandaone.exe / pandaone.cmd / pandaone.bat).
+#: POSIX: a suffix-less executable script (pandaone).
+#: Hardcoding .exe makes the whole PATH-conflict suite silently
+#: meaningless off Windows (it never errors, it just always reports
+#: "no conflict"). Found by 4 red cases on the Ubuntu CI.
+_IS_WIN = sys.platform == "win32"
+CONSOLE_ENTRY = "pandaone.exe" if _IS_WIN else "pandaone"
+MCP_ENTRY = "pandaone-mcp.exe" if _IS_WIN else "pandaone-mcp"
+
+
 def _make_path_tree(tmp_path, dirs_with_pandaone):
-    """构造若干目录，部分目录里放 pandaone.exe。返回 (root, 目录列表)。"""
+    """构造若干目录，部分目录里放 pandaone entry。返回 (root, 目录列表)。"""
     root = tmp_path / "pathtree"
     root.mkdir()
     made = []
@@ -600,7 +611,7 @@ def _make_path_tree(tmp_path, dirs_with_pandaone):
         d = root / f"d{i}"
         d.mkdir()
         if has_exe:
-            (d / "pandaone.exe").write_bytes(b"MZ")
+            (d / CONSOLE_ENTRY).write_bytes(b"MZ")
         made.append(str(d))
     return root, made
 
@@ -612,12 +623,12 @@ def test_path_conflicts_shadows_detects_earlier_entry(tmp_path, monkeypatch):
     root, dirs = _make_path_tree(tmp_path, [True, True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join(dirs + [str(self_dir)]))
-    shadows = pc.shadows(str(self_dir / "pandaone.exe"))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs + [str(self_dir)]))
+    shadows = pc.shadows(str(self_dir / CONSOLE_ENTRY))
     assert shadows, "排在 self 之前的 pandaone 必须被检出"
-    assert shadows[0] == str(root / "d0" / "pandaone.exe")
+    assert shadows[0] == str(root / "d0" / CONSOLE_ENTRY)
 
 
 def test_path_conflicts_shadows_also_covers_mcp_entry(tmp_path, monkeypatch):
@@ -627,14 +638,14 @@ def test_path_conflicts_shadows_also_covers_mcp_entry(tmp_path, monkeypatch):
     root = tmp_path / "mcpc"
     old_dir = root / "old"
     old_dir.mkdir(parents=True)
-    (old_dir / "pandaone-mcp.exe").write_bytes(b"MZ")
+    (old_dir / MCP_ENTRY).write_bytes(b"MZ")
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone-mcp.exe").write_bytes(b"MZ")
+    (self_dir / MCP_ENTRY).write_bytes(b"MZ")
 
     monkeypatch.setenv("PATH", f"{old_dir}{os.pathsep}{self_dir}")
-    shadows = pc.shadows(str(self_dir / "pandaone-mcp.exe"))
-    assert shadows == [str(old_dir / "pandaone-mcp.exe")], \
+    shadows = pc.shadows(str(self_dir / MCP_ENTRY))
+    assert shadows == [str(old_dir / MCP_ENTRY)], \
         "MCP 入口同名冲突必须被检出"
 
 
@@ -645,10 +656,10 @@ def test_path_conflicts_shadows_ignores_later_entry(tmp_path, monkeypatch):
     root, dirs = _make_path_tree(tmp_path, [False, True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join([str(self_dir)] + dirs))
-    assert pc.shadows(str(self_dir / "pandaone.exe")) == [], "排在后面的不算冲突"
+    monkeypatch.setenv("PATH", os.pathsep.join([str(self_dir)] + dirs))
+    assert pc.shadows(str(self_dir / CONSOLE_ENTRY)) == [], "排在后面的不算冲突"
 
 
 def test_path_conflicts_find_all_lists_everything(tmp_path, monkeypatch):
@@ -657,10 +668,10 @@ def test_path_conflicts_find_all_lists_everything(tmp_path, monkeypatch):
     root, dirs = _make_path_tree(tmp_path, [True, True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join(dirs + [str(self_dir)]))
-    hits = pc.find_all(str(self_dir / "pandaone.exe"))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs + [str(self_dir)]))
+    hits = pc.find_all(str(self_dir / CONSOLE_ENTRY))
     assert len(hits) == 2, "两处都该被列出来"
     assert all("self" not in h for h in hits), "当前运行的那个要排除"
 
@@ -671,32 +682,32 @@ def test_path_conflicts_describe_conflicts_shape(tmp_path, monkeypatch):
     root, dirs = _make_path_tree(tmp_path, [True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join(dirs + [str(self_dir)]))
-    d = pc.describe_conflicts(str(self_dir / "pandaone.exe"))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs + [str(self_dir)]))
+    d = pc.describe_conflicts(str(self_dir / CONSOLE_ENTRY))
     assert d["ok"] is False
     assert d["shadow"]
     assert "conflicting pandaone" in d["note"]
 
 
 def test_clean_path_conflicts_renames_and_is_reversible(tmp_path, monkeypatch):
-    """改名备份：文件还在（可逆），但不再叫 pandaone.exe。"""
+    """改名备份：文件还在（可逆），但不再叫 pandaone entry。"""
     from pandaone import cmd_setup
 
     root, dirs = _make_path_tree(tmp_path, [True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join(dirs + [str(self_dir)]))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs + [str(self_dir)]))
     status, msg = cmd_setup.clean_path_conflicts(
-        exclude=str(self_dir / "pandaone.exe"))
+        exclude=str(self_dir / CONSOLE_ENTRY))
     assert status == "ok", msg
 
-    old = root / "d0" / "pandaone.exe"
-    assert not old.exists(), "原来的 pandaone.exe 应该被改名"
-    backups = list((root / "d0").glob("pandaone.exe.bak-pandaone-*"))
+    old = root / "d0" / CONSOLE_ENTRY
+    assert not old.exists(), "原来的 pandaone entry 应该被改名"
+    backups = list((root / "d0").glob(f"{CONSOLE_ENTRY}.bak-pandaone-*"))
     assert backups, "应该留下可逆的备份文件"
     assert backups[0].read_bytes() == b"MZ", "备份内容必须完整"
 
@@ -708,13 +719,13 @@ def test_clean_path_conflicts_noop_when_clean(tmp_path, monkeypatch):
     root.mkdir()
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
     monkeypatch.setenv("PATH", str(self_dir))
 
     status, msg = cmd_setup.clean_path_conflicts(
-        exclude=str(self_dir / "pandaone.exe"))
+        exclude=str(self_dir / CONSOLE_ENTRY))
     assert status == "skip"
-    assert (self_dir / "pandaone.exe").exists(), "没冲突时不能动任何文件"
+    assert (self_dir / CONSOLE_ENTRY).exists(), "没冲突时不能动任何文件"
 
 
 def test_clean_path_conflicts_dry_run_changes_nothing(tmp_path, monkeypatch):
@@ -723,13 +734,13 @@ def test_clean_path_conflicts_dry_run_changes_nothing(tmp_path, monkeypatch):
     root, dirs = _make_path_tree(tmp_path, [True])
     self_dir = root / "self"
     self_dir.mkdir()
-    (self_dir / "pandaone.exe").write_bytes(b"MZ")
+    (self_dir / CONSOLE_ENTRY).write_bytes(b"MZ")
 
-    monkeypatch.setenv("PATH", ";".join(dirs + [str(self_dir)]))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs + [str(self_dir)]))
     status, msg = cmd_setup.clean_path_conflicts(
-        dry_run=True, exclude=str(self_dir / "pandaone.exe"))
+        dry_run=True, exclude=str(self_dir / CONSOLE_ENTRY))
     assert status == "ok", msg
-    assert (root / "d0" / "pandaone.exe").exists(), "dry-run 不能动文件"
+    assert (root / "d0" / CONSOLE_ENTRY).exists(), "dry-run 不能动文件"
 
 
 # ---------------------------------------------------------------------------
