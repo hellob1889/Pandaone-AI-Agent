@@ -39,11 +39,14 @@ Usage
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -52,6 +55,14 @@ PKG = SRC / "pandaone"
 GUARD = SRC / "pandaone_guard"
 MCP = SRC / "pandaone_mcp"
 PACKAGING = ROOT / "packaging"
+
+#: 上一次成功打包的版本记录。
+#:
+#: 为什么需要它：frozen 形态的指纹记录了 {version, hash, form}。exe 字节一变
+#: hash 就变，而版本号没变时会被判定为「篡改」→ 整个 CLI 锁死（连 --version
+#: 都打不开）。也就是说**同版本号重新打包 = 存量用户集体变砖**。发布必须抬
+#: 版本号，这里把这条规则做成构建门禁而不是靠记性。
+RELEASE_STATE = ROOT / ".pandaone" / "release_state.json"
 
 DIST = ROOT / "dist"
 STAGING = ROOT / "installer" / "staging"
@@ -190,6 +201,59 @@ def preflight() -> str:
     version = read_version()
     print(f"  version {version}")
     return version
+
+
+def read_release_state() -> dict:
+    try:
+        return json.loads(RELEASE_STATE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def write_release_state(version: str) -> None:
+    """记录本次成功打包的版本 + exe 摘要（供下一次构建做版本守卫）。"""
+    digest = ""
+    exe = DIST / "pandaone" / "pandaone.exe"
+    if exe.is_file():
+        digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+    try:
+        RELEASE_STATE.parent.mkdir(parents=True, exist_ok=True)
+        RELEASE_STATE.write_text(
+            json.dumps(
+                {
+                    "version": version,
+                    "pandaone_exe_sha256": digest,
+                    "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"  wrote {RELEASE_STATE.relative_to(ROOT)} (version {version})")
+    except Exception as e:
+        print(f"  [WARN] 未能写入 release state: {e}")
+
+
+def check_version_bump(version: str, allow_same: bool) -> None:
+    """拒绝同版本号重打包（除非显式 --allow-same-version）。"""
+    state = read_release_state()
+    last = str(state.get("version") or "")
+    if not last or last != version:
+        return
+    print(f"[WARN] The previous successful build was also version {version}.")
+    print("[WARN] Rebuilding the same version changes the exe bytes -> the")
+    print("[WARN] fingerprint hash changes -> existing users get flagged as")
+    print("[WARN] TAMPERED and their whole CLI locks up.")
+    if allow_same:
+        print("[WARN] --allow-same-version given; continuing (local verification only, do not release)")
+        return
+    raise SystemExit(
+        f"[ERROR] Refusing to rebuild the same version ({version}). "
+        f"Bump the version in pyproject.toml first; "
+        f"use --allow-same-version for local verification only."
+    )
 
 
 def clean() -> None:
@@ -352,6 +416,11 @@ def main() -> int:
     ap.add_argument("--iss-only", action="store_true",
                     help="re-render and recompile the installer only (reuse dist/)")
     ap.add_argument("--clean-only", action="store_true", help="clean and exit")
+    ap.add_argument(
+        "--allow-same-version",
+        action="store_true",
+        help="允许同版本号重打包（仅本地验证用；发布会锁死存量用户的 CLI）",
+    )
     args = ap.parse_args()
 
     print("=" * 64)
@@ -360,8 +429,11 @@ def main() -> int:
 
     version = preflight()
     if args.iss_only:
+        # 只重打安装包，exe 字节没变 → 不受同版本守卫限制
         try_inno_setup(version)
         return 0
+
+    check_version_bump(version, args.allow_same_version)
 
     clean()
     if args.clean_only:
@@ -387,6 +459,7 @@ def main() -> int:
     if ISSUED.exists():
         for exe in sorted(ISSUED.glob("*.exe")):
             print(f"  installer/Output/{exe.name}  ({exe.stat().st_size:,} bytes)")
+    write_release_state(version)
     return 0
 
 

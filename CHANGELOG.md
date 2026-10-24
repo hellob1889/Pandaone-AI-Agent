@@ -2,6 +2,44 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.26.0] - 2026-10-24
+
+### Fixed: 「.exe 打包与发布链路验证」沙盒端到端挖出的三个真 bug
+
+用**真正要交付的产物**（`dist/pandaone/pandaone.exe`，即安装后的 `%LOCALAPPDATA%\Pandaone\pandaone.exe`）
+在沙盒里跑 setup / upgrade / backup / install-mcp 全链路，挖出 3 个**只在打包形态才会犯**的错：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | `pandaone upgrade` 在 exe 里**必然失败**：`pip 升级失败: pandaone: error: argument command: invalid choice: 'pip'` | `_pip()` 用 `sys.executable -m pip`；frozen 形态下 `sys.executable` 就是 `pandaone.exe` 本身，"pip" 被当成 CLI 子命令 | 新增 frozen 分支：exe 形态不碰 pip，改为在 exe 同目录找 `PandaoneSetup-<版本>-x64.exe`，提示用户或用 `--launch-installer` 直接启动 |
+| 2 | `pandaone setup` 的 PATH 步骤是**死代码**：`[WARN] NameError: name '_persist_user_path' is not defined` → 用户装完 exe，命令行里根本没有 `pandaone` | handler 调 `_persist_user_path`，模块里定义的却是 `persist_user_path`（少一个下划线）。每步的 `except Exception` 把 NameError 吞成 WARN，整条 setup 仍 rc=0，单测全绿 | 改回 `persist_user_path`；`_executable_dir()` 改成形态感知（frozen=exe 目录；源码=sysconfig scripts 目录，不是解释器目录）；写完 PATH 广播 `WM_SETTINGCHANGE`，新终端立刻生效 |
+| 3 | `_restart_serve` 在 exe 里同样炸（`sys.executable -m pandaone serve`） | 同 #1 | frozen 走 `[exe, "serve", ...]`，源码走 `[python, "-m", "pandaone", "serve", ...]` |
+
+### Added: 发布链路门禁 —— 同版本重打包 = 存量用户集体变砖
+
+- `build_pyinstaller.py` 记录上次成功打包的版本（`.pandaone/release_state.json`），
+  **同版本号重打包默认直接拒绝**（`--allow-same-version` 仅限本地验证）。
+- 依据（实测，非推理）：frozen 指纹记录 `{version, hash, form}`，**同版本 + hash 变 = 判篡改** →
+  所有真命令 rc=1 锁死；抬版本号则自动刷新指纹（实测 0.7.25.0 → 0.7.26.0 自动刷新，rc=0）。
+  也就是说：**发布必须抬版本号**，否则装了旧版的用户升级即变砖。
+- 注意：`pandaone --version` / `--help` 是 meta 命令，按 v0.7.19 设计**跳过**指纹检查，
+  验证篡改锁死必须用真命令（如 `status`）。
+
+### Changed
+
+- `persist_user_path` / `_persist_path_windows` / `_persist_path_posix` 的返回契约统一为
+  `(状态, 说明)`，状态 ∈ `ok/skip/warn`，与 handler 的步骤契约一致（此前返回 bool，状态位对不上）。
+- `pandaone upgrade` 解析版本号时去掉末尾 0：`0.7.26` 与 `0.7.26.0` 判为同一版本。
+- `pandaone upgrade` 在 exe 形态下会明确区分三种情况：已是最新 / 本地版本已新于 PyPI /
+  PyPI 有新版但同目录没有安装包（并给出该下载什么文件名）。
+
+### Tests
+
+- `tests/test_cmd_setup_upgrade.py` +14 例：PATH 步骤真的被调用、无 NameError、
+  frozen 目录取 exe 目录、frozen 不碰 pip、找不到安装包、找到安装包、`--from-source` 拒绝、
+  版本比较、打包守卫（同版本拒绝 / 抬版本放行 / `--allow-same-version` 放行）。
+- 全量：**513 passed, 9 skipped**（上一版 499 + 14）。
+
 ## [0.7.25.0] - 2026-10-24
 
 ### Fixed: 「安装后自动注册 MCP」沙盒端到端挖出的两个真 bug

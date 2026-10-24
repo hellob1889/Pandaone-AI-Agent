@@ -67,7 +67,24 @@ def _parse_min_python(spec: str) -> tuple[int, int]:
 
 
 def _executable_dir() -> Path:
-    """pandaone 可执行文件所在目录（Windows: Scripts；POSIX: bin）。"""
+    """pandaone 可执行文件所在目录。
+
+    frozen（.exe 安装包形态）：exe 自己所在的目录，即 %LOCALAPPDATA%\\Pandaone。
+    源码 / pip 安装形态：解释器的 scripts 目录（pandaone.exe 真正落地的位置）。
+
+    注意：源码形态下 ``Path(sys.executable).parent`` 是**解释器**目录
+    （如 C:\\Python311），不是 scripts 目录；把它写进 PATH 等于白写。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    try:
+        import sysconfig
+
+        scripts = sysconfig.get_path("scripts")
+        if scripts:
+            return Path(scripts).resolve()
+    except Exception:
+        pass
     return Path(sys.executable).resolve().parent
 
 
@@ -75,14 +92,14 @@ def _executable_dir() -> Path:
 # PATH 持久化
 # ---------------------------------------------------------------------------
 
-def persist_user_path(target: str | Path) -> tuple[bool, str]:
+def persist_user_path(target: str | Path) -> tuple[str, str]:
     """把 target 目录写进**用户级** PATH（不动系统级）。
 
     Windows: 写 HKCU\\Environment\\Path
     POSIX:   追加 export PATH 到 ~/.bashrc / ~/.zshrc
 
     Returns:
-        (是否改动了, 说明文本)
+        (状态, 说明文本)，状态 ∈ ok / skip / warn
     """
     target = str(Path(target).expanduser().resolve())
     try:
@@ -90,10 +107,26 @@ def persist_user_path(target: str | Path) -> tuple[bool, str]:
             return _persist_path_windows(target)
         return _persist_path_posix(target)
     except Exception as e:
-        return False, f"PATH 持久化失败: {e}"
+        return "warn", _t("setup_path_failed", err=str(e))
 
 
-def _persist_path_windows(target: str) -> tuple[bool, str]:
+def _broadcast_env_change() -> None:
+    """通知 Explorer 环境变量已变（新开的终端立刻生效）。失败不影响主流程。"""
+    try:
+        import ctypes
+
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, None,
+        )
+    except Exception:
+        pass
+
+
+def _persist_path_windows(target: str) -> tuple[str, str]:
     import winreg
 
     with winreg.OpenKey(
@@ -107,14 +140,15 @@ def _persist_path_windows(target: str) -> tuple[bool, str]:
         norm = target.rstrip("\\/").lower()
         for p in parts:
             if p.rstrip("\\/").lower() == norm:
-                return False, f"PATH 已包含 {target}，无需修改"
+                return "skip", _t("setup_path_present", target=target)
         parts.append(target)
         new_value = ";".join(parts)
         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_value)
-    return True, f"已把 {target} 写入用户 PATH（新开终端后生效）"
+    _broadcast_env_change()
+    return "ok", _t("setup_path_added", target=target)
 
 
-def _persist_path_posix(target: str) -> tuple[bool, str]:
+def _persist_path_posix(target: str) -> tuple[str, str]:
     home = Path.home()
     for rc_name in (".bashrc", ".zshrc", ".profile"):
         rc = home / rc_name
@@ -125,14 +159,14 @@ def _persist_path_posix(target: str) -> tuple[bool, str]:
         except OSError:
             continue
         if target in text:
-            return False, f"PATH 已包含 {target}（{rc_name}）"
+            return "skip", _t("setup_path_present", target=target)
         try:
             with rc.open("a", encoding="utf-8") as f:
                 f.write(f'\nexport PATH="{target}:$PATH"\n')
         except OSError as e:
-            return False, f"PATH 持久化失败（{rc_name}）: {e}"
-        return True, f"已把 {target} 写入 {rc_name}"
-    return False, "未找到可写的 shell rc 文件（~/.bashrc / ~/.zshrc），PATH 未修改"
+            return "warn", _t("setup_path_failed", err=str(e))
+        return "ok", _t("setup_path_posix_added", target=target, rc=rc_name)
+    return "warn", _t("setup_path_no_rc")
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +389,7 @@ def handler(args) -> int:
     steps = [
         ("Python", lambda: _step_python(min_py)),
         ("git", lambda: _step_git(not getattr(args, "skip_git_install", False))),
-        ("PATH", lambda: _persist_user_path(_executable_dir())),
+        ("PATH", lambda: persist_user_path(_executable_dir())),
         ("git 仓库", lambda: _step_git_repo(root)),
         ("Pandaone init", lambda: _step_init(root)),
     ]

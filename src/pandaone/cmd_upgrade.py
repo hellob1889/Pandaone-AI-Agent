@@ -64,6 +64,11 @@ def add_parser(sub) -> None:
     )
     p.add_argument("--no-restart", action="store_true", help="不重启看门狗/仪表盘")
     p.add_argument(
+        "--launch-installer",
+        action="store_true",
+        help="找到同目录的新版本安装包时直接启动它（exe 形态专用）",
+    )
+    p.add_argument(
         "--package",
         default="pandaone-guard",
         help="要升级的包名（默认 pandaone-guard）",
@@ -77,6 +82,96 @@ def _current_version() -> str:
         return __version__
     except Exception:
         return "unknown"
+
+
+def _is_frozen() -> bool:
+    """是否跑在 PyInstaller 打包的 exe 里。
+
+    frozen 形态下 ``sys.executable`` 就是 pandaone.exe 本身，
+    既没有 pip，也没有 ``-m`` 模块执行语义 —— 任何
+    ``sys.executable -m xxx`` 的调用都会变成"把 xxx 当成 CLI 子命令"，
+    从而以 invalid choice 失败。exe 形态的升级必须走安装包，而不是 pip。
+    """
+    return bool(getattr(sys, "frozen", False))
+
+
+def _ver_tuple(v: str) -> tuple:
+    """把版本号解析成可比较的元组（'0.7.26.0' -> (0, 7, 26)）。
+
+    末尾的 0 会被去掉，这样 '0.7.26' 与 '0.7.26.0' 判为同一版本
+    （PyPI 与本地产物的写法经常不一致）。
+    """
+    out = []
+    for chunk in str(v or "").split("."):
+        num = ""
+        for ch in chunk:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        out.append(int(num) if num else 0)
+    while len(out) > 1 and out[-1] == 0:
+        out.pop()
+    return tuple(out)
+
+
+def _find_installer(version: str) -> Path | None:
+    """在 exe 同目录找同版本号的安装包。
+
+    用户把新下载的安装包和 pandaone.exe 放同一目录后，
+    ``pandaone upgrade`` 就能直接定位到它。
+    """
+    if not version:
+        return None
+    try:
+        base = Path(sys.executable).resolve().parent
+    except Exception:
+        return None
+    for name in (f"PandaoneSetup-{version}-x64.exe", f"PandaoneSetup-{version}.exe"):
+        cand = base / name
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def _handle_frozen(args, before: str, latest: str | None) -> int:
+    """exe（打包）形态下的升级：不碰 pip，只认安装包。"""
+    if getattr(args, "from_source", False):
+        print(_t("upgrade_frozen_from_source_unsupported"))
+        return 1
+
+    if not latest:
+        print(_t("upgrade_frozen_cannot_check"))
+        return 1
+
+    if _ver_tuple(latest) == _ver_tuple(before):
+        # "已经是最新版本" 由 handler 的公共段打印，这里不重复
+        return 0
+
+    if _ver_tuple(latest) < _ver_tuple(before):
+        print(_t("upgrade_frozen_local_newer", current=before, pypi=latest))
+        return 0
+
+    # PyPI 上有更新版本
+    installer = _find_installer(latest)
+    if installer is None:
+        print(_t("upgrade_frozen_installer_missing", version=latest))
+        return 1
+
+    print(_t("upgrade_frozen_installer_found", path=str(installer), version=latest))
+    if not getattr(args, "launch_installer", False):
+        print(_t("upgrade_frozen_installer_hint"))
+        return 0
+    try:
+        subprocess.Popen([str(installer)], cwd=str(installer.parent))
+    except Exception as e:
+        print(_t("upgrade_frozen_launch_fail", err=str(e)))
+        return 1
+    print(_t("upgrade_frozen_launched", path=str(installer)))
+    return 0
 
 
 def _pip(args, timeout: int = 600):
@@ -199,7 +294,10 @@ def _restart_serve(root: Path) -> tuple[bool, str]:
     if not stopped:
         # 没找到在跑的仪表盘 —— 直接起一个新的
         pass
-    cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
+    if _is_frozen():
+        cmd = [sys.executable, "serve", "--root", str(root)]
+    else:
+        cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
     kwargs = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = (
@@ -246,6 +344,10 @@ def handler(args) -> int:
     if getattr(args, "check_only", False):
         print(_t("upgrade_check_only"))
         return 0
+
+    if _is_frozen():
+        # exe 形态：没有 pip、没有 -m 模块语义，只能走安装包升级
+        return _handle_frozen(args, before, latest)
 
     print(_t("upgrade_pip_running"))
     try:

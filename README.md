@@ -407,7 +407,7 @@ pip install pandaone-guard
 | `pandaone install-git` | 自动安装 git |
 | `pandaone ci` | L7 CI 验证（git diff vs audit log）|
 | `pandaone setup` | **🆕 一键本地部署**（Python/git 检查 → PATH 持久化 → git 仓库 + baseline commit → init → 看门狗 → 右键菜单 → 仪表盘 → doctor 体检；不设 remote、不推送）|
-| `pandaone upgrade` | **🆕 一键升级**（pip 升级 → 指纹自动刷新 → 重启看门狗 / 仪表盘 → 打印版本对比）|
+| `pandaone upgrade` | **🆕 一键升级**（pip 升级 → 指纹自动刷新 → 重启看门狗 / 仪表盘 → 打印版本对比。**exe 形态没有 pip**：改为在 exe 同目录找新版安装包 `PandaoneSetup-<版本>-x64.exe`，加 `--launch-installer` 可直接启动）|
 | `pandaone backup` | **🆕 纯本地备份**（`--output x.bundle` 生成 git bundle；`--mirror DIR` 建本地裸仓库镜像；**不碰远程**）|
 | `pandaone install-mcp` | **🆕 注册 MCP server**（探测 Claude Desktop / Cursor / Trae / Windsurf；写前备份、只合并不覆盖、装后回读自检）|
 | `pandaone init --with-git` | 初始化时一并建 git 仓库并提交 baseline commit |

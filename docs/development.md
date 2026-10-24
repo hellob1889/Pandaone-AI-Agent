@@ -169,6 +169,10 @@ work/_buildenv/Scripts/python build_pyinstaller.py
    `sys._MEIPASS/<pkg>` 分支；版本号读 `_MEIPASS/pandaone/_build_info.py`
    （由 `build_pyinstaller.py` 注入）。
 
+4. **发布必须抬版本号** —— 同版本重打包 = 存量用户集体变砖（详见第 7 节）。
+   `build_pyinstaller.py` 已把它做成硬门禁：同版本直接拒绝，
+   除非显式 `--allow-same-version`（仅限本地验证，不要发布）。
+
 ### 环境注意
 
 - 官方 Inno Setup **不带简体中文 `.isl`** —— 打包脚本会自动探测，缺失就退回英文向导。
@@ -186,7 +190,81 @@ work/_buildenv/Scripts/python build_pyinstaller.py
 python -m pytest tests/ -q --timeout=180 -p no:cacheprovider
 ```
 
-基线（v0.7.24.0）：`494 passed, 9 skipped`（约 171 秒）。
+基线（v0.7.26.0）：`513 passed, 9 skipped`（约 180 秒）。
 
 `--collect-only` 不会污染环境；改了源码又没抬版本号时，测试会**整片红** ——
 先确认是不是指纹锁死，而不是急着改代码。
+
+---
+
+## 7. 发布链路铁律（.exe）
+
+### 7.1 同版本重打包 = 存量用户集体变砖
+
+frozen 形态的指纹记录是 `{version, hash, form}`（`~/.pandaone_fp.txt`）。
+`check_fingerprint()` 的判定顺序：
+
+```
+hash 相同                    → 直接放行（不看版本）
+hash 不同 + strict           → 判篡改，锁死
+hash 不同 + 版本号变了       → 自动刷新指纹，放行
+hash 不同 + 形态变了         → 自动刷新指纹，放行
+hash 不同 + 版本与形态都没变 → 判篡改，锁死（rc=1）
+```
+
+exe 的字节一变，hash 就变。**版本号不变 = 走进最后一行 = 存量用户全部被锁死**
+（`status` / `doctor` / `backup` 全都跑不了，只能 `--update-fingerprint 0000` 救）。
+
+所以：**每次发布必须抬 `pyproject.toml` 的版本号**。
+`build_pyinstaller.py` 把这条做成了硬门禁：记录上次成功打包的版本
+（`.pandaone/release_state.json`），同版本直接 `SystemExit`；
+只有显式 `--allow-same-version` 才放行（仅限本地验证，不要发布）。
+
+实测证据（v0.7.26.0）：同版本 + 改坏 hash → `rc=1` + "指纹不匹配，可能被篡改"；
+版本从 0.7.25.0 抬到 0.7.26.0 → 自动刷新 → `rc=0`。
+
+### 7.2 验证篡改锁死必须用真命令
+
+`pandaone --version` / `--help` 是 meta 命令，**按设计跳过指纹检查**（v0.7.19）。
+拿它们验证"篡改会不会锁死"会得到假阴性（rc=0，看着像没锁）。
+必须用真命令，例如 `status`：
+
+```powershell
+# 沙盒 HOME 里把指纹 hash 改坏，版本号保持与 exe 一致
+pandaone.exe status   # → rc=1 + 指纹不匹配提示
+```
+
+### 7.3 frozen 形态不能假设有 pip / 有解释器
+
+frozen 形态下 `sys.executable` **就是 `pandaone.exe` 本身**，
+既没有 `pip`，也没有 `-m 模块` 的语义。
+任何 `sys.executable -m xxx` 都会变成"把 xxx 当成 CLI 子命令"，
+报 `argument command: invalid choice: 'xxx'`。
+
+| 场景 | 源码形态 | frozen 形态 |
+|---|---|---|
+| 升级 | `[python, "-m", "pip", "install", ...]` | 无 pip → 走安装包：同目录找 `PandaoneSetup-<版本>-x64.exe` |
+| 起仪表盘 | `[python, "-m", "pandaone", "serve", ...]` | `[pandaone.exe, "serve", ...]` |
+| 可执行目录 | `sysconfig.get_path("scripts")` | `Path(sys.executable).parent` |
+
+写新命令时，**只要它会 spawn 子进程，就必须同时想清楚 frozen 分支**。
+
+### 7.4 端到端必须用真正要交付的产物
+
+源码树跑通 ≠ 交付物可用。v0.7.26.0 的三个 bug 全部只在 `dist/pandaone/pandaone.exe`
+上才暴露 —— 源码树里跑 `upgrade` 一切正常，因为 `sys.executable` 是真的 python。
+
+标准沙盒姿势：
+
+- 重定向 `APPDATA` / `USERPROFILE` / `HOME` —— 隔离真实 IDE 配置与指纹文件；
+- 快照并还原 `HKCU\Environment\Path` —— `setup` 会写它；
+- 跑完按沙盒路径清理子进程（看门狗 / 仪表盘会在后台活下来）。
+
+### 7.5 打包完成后先验版本，再验别的
+
+```powershell
+dist\pandaone\pandaone.exe --version    # 必须是刚抬的版本号
+```
+
+如果 `--version` 显示的还是旧版本，说明 `build/_build_info.py` 没重新注入，
+后面所有验证都是白做。

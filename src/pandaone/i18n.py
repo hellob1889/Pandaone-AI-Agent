@@ -97,6 +97,12 @@ TRANSLATIONS = {
         "setup_doctor": "体检完成 (exit={rc})",
         "setup_summary": "部署摘要:",
         "setup_done": "本地部署完成。所有环节均在本地完成，未设置任何远程仓库。",
+        # ============ v0.7.26: PATH 持久化 ============
+        "setup_path_added": "已把 {target} 写入用户 PATH（新开终端后生效）",
+        "setup_path_present": "PATH 已包含 {target}，无需修改",
+        "setup_path_failed": "PATH 持久化失败: {err}",
+        "setup_path_posix_added": "已把 {target} 写入 {rc}",
+        "setup_path_no_rc": "未找到可写的 shell rc 文件（~/.bashrc / ~/.zshrc），PATH 未修改",
 
         # ============ v0.7.23: init --with-git（建议 1.2）============
         "init_with_git_done": "[OK] git 仓库就绪: {msg}",
@@ -109,6 +115,15 @@ TRANSLATIONS = {
         "upgrade_latest_unknown": "无法查询 PyPI 最新版本（离线？）",
         "upgrade_already_latest": "已经是最新版本",
         "upgrade_check_only": "仅检查模式，未执行升级",
+        # ============ v0.7.26: exe（打包）形态的升级 ============
+        "upgrade_frozen_from_source_unsupported": "当前是打包后的 exe，没有 pip 环境，无法从源码升级；请下载新的安装包覆盖安装。",
+        "upgrade_frozen_cannot_check": "无法查询 PyPI 最新版本（离线？），exe 形态无法自动升级。",
+        "upgrade_frozen_local_newer": "本地版本 {current} 已新于 PyPI 上的 {pypi}，无需升级。",
+        "upgrade_frozen_installer_missing": "PyPI 上有更新版本 {version}，但本目录没找到对应安装包；请下载 PandaoneSetup-{version}-x64.exe 并放到 pandaone.exe 同目录后重试。",
+        "upgrade_frozen_installer_found": "在同目录找到新版安装包: {path}",
+        "upgrade_frozen_installer_hint": "加上 --launch-installer 可让本命令直接启动它。",
+        "upgrade_frozen_launch_fail": "启动安装包失败: {err}",
+        "upgrade_frozen_launched": "已启动安装包: {path}",
         "upgrade_pip_running": "正在通过 pip 升级...",
         "upgrade_pip_ok": "pip 升级完成",
         "upgrade_pip_fail": "pip 升级失败: {err}",
@@ -584,6 +599,12 @@ TRANSLATIONS = {
         "setup_doctor": "health check done (exit={rc})",
         "setup_summary": "Setup summary:",
         "setup_done": "Local setup complete. Everything ran locally; no remote repository was configured.",
+        # ============ v0.7.26: PATH persistence ============
+        "setup_path_added": "Added {target} to the user PATH (takes effect in new terminals)",
+        "setup_path_present": "PATH already contains {target}; nothing to do",
+        "setup_path_failed": "Failed to persist PATH: {err}",
+        "setup_path_posix_added": "Added {target} to {rc}",
+        "setup_path_no_rc": "No writable shell rc file found (~/.bashrc / ~/.zshrc); PATH not modified",
 
         # ============ v0.7.23: init --with-git ============
         "init_with_git_done": "[OK] git repository ready: {msg}",
@@ -596,6 +617,15 @@ TRANSLATIONS = {
         "upgrade_latest_unknown": "Could not query PyPI for the latest version (offline?)",
         "upgrade_already_latest": "Already up to date",
         "upgrade_check_only": "Check-only mode, nothing upgraded",
+        # ============ v0.7.26: upgrade for the packaged (exe) build ============
+        "upgrade_frozen_from_source_unsupported": "This is a packaged exe with no pip environment; source upgrade is unavailable. Download the new installer and install over it.",
+        "upgrade_frozen_cannot_check": "Could not query PyPI for the latest version (offline?); a packaged exe cannot self-upgrade.",
+        "upgrade_frozen_local_newer": "Local build {current} is newer than PyPI {pypi}; nothing to upgrade.",
+        "upgrade_frozen_installer_missing": "PyPI has a newer version {version}, but no matching installer was found next to pandaone.exe. Download PandaoneSetup-{version}-x64.exe into the same folder and retry.",
+        "upgrade_frozen_installer_found": "Found the new installer next to pandaone.exe: {path}",
+        "upgrade_frozen_installer_hint": "Add --launch-installer to let this command start it for you.",
+        "upgrade_frozen_launch_fail": "Failed to launch the installer: {err}",
+        "upgrade_frozen_launched": "Installer launched: {path}",
         "upgrade_pip_running": "Upgrading via pip...",
         "upgrade_pip_ok": "pip upgrade finished",
         "upgrade_pip_fail": "pip upgrade failed: {err}",
