@@ -2,6 +2,40 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.32.0] - 2026-10-26
+
+自 v0.7.21.3 之后的**第一个发布版本**。
+
+0.7.24.0 ~ 0.7.31.0 这一串版本号始终只在开发分支上流转，**从未发布到 PyPI / GitHub Release**；
+它们各自的真机回归结论与修复内容完整保留在下方各段里。本次把这一整批改动一次性发布出去。
+
+### 本次发布包含什么
+
+| 来源版本 | 主题 |
+|---|---|
+| 0.7.31.0 | MCP 子进程输出编码错配（GBK 解 UTF-8）导致整条 `tools/call` 链路瘫掉；全仓 9 处 `subprocess` 显式指定 encoding |
+| 0.7.31.0 | `path_conflicts` 入口名硬编码 Windows 后缀 → Linux/macOS 上 PATH 抢占检测**静默失效** |
+| 0.7.31.0 | `git_ops` 本地镜像回退产出嵌套布局，与 `git clone --mirror` 不一致 → 照文档恢复不出来 |
+| 0.7.31.0 | `pre-commit` 模板里写死作者本机 `D:\软件\Git\...` 路径 |
+| 0.7.32.0 | 上一条的修法（运行时反推安装根）被真机对照实验**证伪** → 改为安装时固化 git 路径 |
+
+### 为什么版本号是 0.7.32.0，而不是直接发 0.7.31.0
+
+**因为 0.7.31.0 已经在真机上装过了**（`%LOCALAPPDATA%\Pandaone\pandaone.exe` 报的就是 v0.7.31.0）。
+
+L5 自指纹记录的是 `{version, hash, form}` 三元组，而 `check_fingerprint()` 只在两种情况下自动刷新：
+
+- **版本号变了**（升级）；
+- **运行形态变了**（源码树 ⇄ PyInstaller 打包版 —— 两者文件集合本来就不同）。
+
+于是「同版本号重打包」会落进第三种情况：**版本号不变 + 形态不变 + hash 变了** = 判定为**真篡改**
+→ 整个 CLI 锁死，连 `--version` 都打不开。
+
+仓库自带的 `build_pyinstaller.py` 已经把这条规则做成了构建门禁（`check_version_bump`）：
+同版本号重打包会被直接拒绝，除非显式加 `--allow-same-version`（该选项的注释写明「仅本地验证用」）。
+
+所以发布必须抬版本号 —— 本次从 0.7.31.0 抬到 **0.7.32.0**。
+
 ## [0.7.31.0] - 2026-10-25
 
 真机回归探针的最后一关卡住：`pandaone_init` 这类 **MCP tools/call 全部返回 isError=true**。
