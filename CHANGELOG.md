@@ -87,12 +87,45 @@ CI 是有价值的：v0.7.31.0 的首轮 Ubuntu CI 连续红两次，第二次�
 |---|---|---|---|---|
 | 1 | `src/pandaone/path_conflicts.py` | Linux/macOS 上 `find_all()` / `shadows()` 恒返回空，整套 PATH 抢占检测**静默失效** | 入口名常量只列了 Windows 后缀（`pandaone.exe/.cmd/.bat`），而 POSIX 上 pip 生成的是**无扩展名**的 `pandaone` | 按 `os.name` 分平台构造 `CONSOLE_SCRIPT_NAMES` / `MCP_SCRIPT_NAMES`；同一目录只取第一个命中的名字（避免 `.exe` 与 `.cmd` 被数成两处）；self 命中时继续检查同目录的其它入口（如 `pandaone-mcp`） |
 | 2 | `src/pandaone/git_ops.py` | Windows 上产出的本地镜像**照着文档恢复不出来**（`git clone --local` / `clone --bare` / `clone <mirror>/.git` 四种方式实测全部 rc=128） | 回退逻辑产出 `target/.git/` 嵌套布局，与 `git clone --mirror` 的 bare 布局不一致；而 Windows 上 `git clone` 本地路径必然要调 `git-upload-pack`（Git for Windows 的 `cmd/` 只有 `.exe` 没有无后缀 sh 脚本） | 回退改为 `git init --bare` 生成骨架后复制 `objects/refs/packed-refs/HEAD`，并写入 `remote.origin.url` / `fetch` refspec / `mirror` 标记；**两平台布局统一**，且可被 `git --git-dir=<mirror>` 离线读取 |
-| 3 | `src/pandaone/templates/pre-commit-check.py` | 模板里写死了作者本机的 `D:\软件\Git\...` 路径 | 早期为绕过 hook 子 shell PATH 为空留下的硬编码，但该模板会**分发到所有用户机器** | 改为优先 `GIT_EXECUTABLE` 与 PATH，再从 git 注入的 `GIT_EXEC_PATH` 反推安装根目录（任意盘符都能命中），最后才退到 `Program Files` 常见位置 |
+| 3 | `src/pandaone/templates/pre-commit-check.py` | 模板里写死了作者本机的 `D:\软件\Git\...` 路径 | 早期为绕过 hook 子 shell PATH 为空留下的硬编码，但该模板会**分发到所有用户机器** | 改为优先 `GIT_EXECUTABLE` 与 PATH，再从 git 注入的 `GIT_EXEC_PATH` 反推安装根目录（任意盘符都能命中），最后才退到 `Program Files` 常见位置（**此方案已被下一节的真机对照实验证伪**） |
 
 配套测试改造（`tests/`）：
 - `test_cmd_setup_upgrade.py`：入口名按平台取 `CONSOLE_ENTRY` / `MCP_ENTRY`，PATH 拼接改 `os.pathsep`；
 - `test_cmd_backup.py` / `test_git_ops.py`：镜像断言兼容两种合法布局，并新增**离线可读 + 内容完整 + 可原样复制**三条真正契约
   （刻意**不用** `git clone` 验证 —— 那测的是 git 的环境，不是我们的备份）。
+
+### Fixed: pre-commit hook 在 Windows 上找不到 git —— 门禁静默失效
+
+上一条修法（删掉模板里写死的 `D:/软件/Git/...`，改成"运行时反推安装根"）在 Windows 上**不成立**，
+本节的真机对照实验把它证伪了。
+
+**症状**：Windows 上 `git commit` 被 hook 拦下，stderr 是
+`[Pandaone] git call failed: [WinError 2] 系统找不到指定的文件`。
+对照实验（同一台机器、同一套测试）：基线（保留硬编码路径）31 passed，改动后 3 个用例变红。
+
+**根因**：Git for Windows 的 hook 环境是"敌意环境"——
+
+| 探针 | hook 里的实际值 | 后果 |
+|---|---|---|
+| `PATH` | 被重写成 MSYS 风格 | `shutil.which("git")` 按 Windows 语义拼 PATH，必然找不到 |
+| PATH 里含非 ASCII 的项 | `D:/软件/Git/cmd` → mojibake `D:/鏉瀄ue.../Git/cmd` | 该路径在磁盘上根本不存在 |
+| `GIT_EXEC_PATH` | 同样是 mojibake | 从它反推安装根的候选全部 `isfile=False` |
+| `tr` / `grep` | command not found | hook 里连 coreutils 都未必有 |
+
+结论：**hook 运行环境里没有任何一个来源能拿到未损坏的 git 路径**——
+含非 ASCII 的 PATH 项被转码坏了，`GIT_EXEC_PATH` 也坏了。
+唯一能拿到真值的时刻是**安装时刻**（一个 PATH 完好的普通进程）。
+
+**修法**：把"找 git"从运行时挪到安装时。
+
+| 位置 | 改动 |
+|---|---|
+| `src/pandaone/install_hook.py` | 安装时用 `_find_git_executable()` 解析 git 绝对路径，写入 `.pandaone/git_exe.txt` |
+| `src/pandaone/templates/pre-commit-check.py` | `_resolve_git_exe()` 改为**逐级降级**：环境变量覆盖 → 安装时 hint → `GIT_EXECUTABLE` → `shutil.which` → 从 `GIT_EXEC_PATH` 逐级回溯安装根（同时按 Windows / POSIX 两种分隔符处理）→ `where.exe git` → 常见安装位置 → 兜底 `"git"` |
+| `tests/test_pre_commit_git_resolve.py` | 新增 5 条回归：hint 写入、hint 优先、**残缺 PATH + mojibake GIT_EXEC_PATH 下仍能定位 git**、任何环境都不抛异常、反推能走到安装根 |
+
+**验证**：WSL Ubuntu（真实 Linux 语义，非模拟）全量 **537 passed / 11 skipped / 0 failed**；
+Windows 全量除 3 个 `test_pandax_serve` 并发 flaky 外全绿（该文件单独跑 20 passed，与本次改动无关）。
 
 ### 踩坑留档
 

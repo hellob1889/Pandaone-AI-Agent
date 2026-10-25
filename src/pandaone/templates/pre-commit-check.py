@@ -18,6 +18,7 @@ Phase 10: i18n — 所有 print 走 t()，由 pandaone.i18n 提供。
   - 缺记录就 exit 1（拒绝 commit）
 """
 import json
+import ntpath
 import os
 import shutil
 import subprocess
@@ -25,20 +26,157 @@ import sys
 from pathlib import Path
 
 
+def _read_installed_git_hint():
+    """读取**安装时**固化的 git 绝对路径 (.pandaone/git_exe.txt)。
+
+    为什么必须有一个"安装时"的来源：
+      pre-commit hook 运行在**敌意环境**里（见 shell 包装脚本的说明）。
+      Git for Windows 会把 PATH 重写成 MSYS 风格，其中**含非 ASCII 字符的
+      目录项**（典型：D:\\软件\\Git\\cmd）会被按错误代码页解码，变成
+      mojibake（D:\\鏉瀄ue...\\Git\\cmd）—— 这个路径在磁盘上根本不存在。
+      于是：
+        - shutil.which("git") 必然返回 None（它按 Windows 语义拼 PATH）；
+        - 从 GIT_EXEC_PATH 反推出来的候选**同样带 mojibake**，isfile 必假；
+        - 唯一"真值"只剩裸命令 "git"，而 PATH 里同样找不到它 -> WinError 2。
+
+      而**只有安装时刻**（一个 PATH 完好的普通 Windows 进程）能拿到未损坏的
+      路径。pandaone install-hook 因此解析一次 git 并写进
+      .pandaone/git_exe.txt，本函数负责把它读回来。
+    """
+    candidates = []
+    try:
+        candidates.append(Path.cwd() / ".pandaone" / "git_exe.txt")
+    except OSError:
+        pass
+    try:
+        # check 脚本被复制到 <repo>/.pandaone/ 下，git_exe.txt 与它同目录
+        candidates.append(Path(__file__).resolve().parent / "git_exe.txt")
+    except (OSError, TypeError, ValueError):
+        pass
+    for p in candidates:
+        try:
+            if p.is_file():
+                val = p.read_text(encoding="utf-8", errors="ignore").strip()
+                if val:
+                    return val
+        except OSError:
+            continue
+    return None
+
+
+def _git_candidates_from_exec_path(exec_path):
+    """从 GIT_EXEC_PATH 反推安装根下的 git 可执行文件候选。
+
+    Git 在 hook 环境里会注入 GIT_EXEC_PATH
+    （Windows: <root>\\mingw64\\libexec\\git-core；Linux: /usr/lib/git-core）。
+    这里向上**逐级**回溯到安装根，再列举该根下各平台布局里的 git：
+      <root>\\cmd\\git.exe           （Git for Windows 的 shim）
+      <root>\\bin\\git.exe
+      <root>\\mingw64\\bin\\git.exe
+      <root>\\mingw64\\cmd\\git.exe
+      <root>\\usr\\bin\\git.exe
+
+    比硬编码任何人的安装路径都可靠：装在 C/D/E 盘任意位置都能命中，
+    也不必把作者机器的目录结构分发到每个用户机器上。
+
+    注意：Windows 上这条推导路径**可能整体失效**——GIT_EXEC_PATH 里的
+    非 ASCII 段在 hook 环境里是 mojibake。此时靠安装时 hint 兜底。
+    """
+    out = []
+    seen = set()
+    # 同时按 Windows 与 POSIX 两种分隔符规则回溯：
+    #   - Windows 上 os.path 就是 ntpath，天然处理反斜杠
+    #   - POSIX 上若收到 Windows 风格路径（跨平台模板文件 + 异常环境），
+    #     只有 ntpath 能把它拆开
+    for pathmod in (os.path, ntpath):
+        try:
+            p = pathmod.normpath(exec_path)
+        except (TypeError, ValueError):
+            continue
+        for _ in range(5):
+            parent = pathmod.dirname(p)
+            if not parent or parent == p:
+                break
+            p = parent
+            for sub in (
+                ("cmd", "git.exe"),
+                ("bin", "git.exe"),
+                ("mingw64", "bin", "git.exe"),
+                ("mingw64", "cmd", "git.exe"),
+                ("usr", "bin", "git.exe"),
+                ("bin", "git"),
+                ("cmd", "git"),
+            ):
+                cand = pathmod.join(parent, *sub)
+                if cand not in seen:
+                    seen.add(cand)
+                    out.append(cand)
+    return out
+
+
+def _where_git():
+    """Windows 原生查找：where.exe git（走 Windows 自己的 PATH 语义）。
+
+    与 shutil.which 不同，where.exe 读的是 Windows 原生环境块；
+    当 PATH 未被 MSYS 破坏时它能给出未损坏的绝对路径。
+    """
+    if os.name != "nt":
+        return None
+    try:
+        proc = subprocess.run(
+            ["where.exe", "git"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    for line in (proc.stdout or "").splitlines():
+        cand = line.strip()
+        if cand and os.path.isfile(cand):
+            return cand
+    return None
+
+
 def _resolve_git_exe():
     """
     Resolve `git` executable absolute path.
 
-    Git for Windows hook sub-shell PATH is nearly empty, so the bare
-    command name "git" may not be found. Walk common install locations
-    + PATH lookup + GIT_EXECUTABLE env hint. Used by pre-commit-check.py
-    to avoid `FileNotFoundError` even when hook PATH is broken.
+    候选顺序（每个都必须 isfile 才被采用）：
+      1. PANDAONE_GIT_EXE      —— 环境变量显式覆盖
+      2. .pandaone/git_exe.txt —— **安装时**固化的路径（Windows 上唯一可靠）
+      3. GIT_EXECUTABLE        —— git 自身注入的提示
+      4. shutil.which("git")   —— PATH 完好时有效（Linux/macOS）
+      5. GIT_EXEC_PATH 反推    —— 逐级回溯安装根
+      6. where.exe git         —— Windows 原生 PATH 查找
+      7. 常见安装位置
+      8. "git"                 —— 兜底：留给 PATH 正常的环境
+
+    逐级降级而不是"一失败就报错"：任何一级拿到真实存在的文件即可；
+    失效的候选（git 被移动/卸载/换机）会自动落到下一级。
     """
     candidates = []
+
+    env_override = os.environ.get("PANDAONE_GIT_EXE")
+    if env_override:
+        candidates.append(env_override)
+
+    hint = _read_installed_git_hint()
+    if hint:
+        candidates.append(hint)
+
     env_hint = os.environ.get("GIT_EXECUTABLE")
     if env_hint:
         candidates.append(env_hint)
-    which = shutil.which("git")
+
+    try:
+        which = shutil.which("git")
+    except Exception:
+        which = None
     if which:
         candidates.append(which)
     # Git 在 hook 环境里会注入 GIT_EXEC_PATH
@@ -48,13 +186,12 @@ def _resolve_git_exe():
     # 位置都能命中，也不必把作者机器的目录结构分发到每个用户机器上。
     exec_path = os.environ.get("GIT_EXEC_PATH") or ""
     if exec_path:
-        parents = [os.path.dirname(exec_path), os.path.dirname(os.path.dirname(exec_path))]
-        for parent in parents:
-            if not parent:
-                continue
-            for sub, exe in (("cmd", "git.exe"), ("bin", "git.exe"),
-                             ("bin", "git"), ("cmd", "git")):
-                candidates.append(os.path.join(parent, sub, exe))
+        candidates.extend(_git_candidates_from_exec_path(exec_path))
+    # Windows 原生 PATH 查找（where.exe 不受 MSYS 路径重写影响时最准）
+    where = _where_git()
+    if where:
+        candidates.append(where)
+
     # Common Windows install locations
     for d in (
         r"C:\Program Files\Git\cmd\git.exe",
@@ -65,8 +202,11 @@ def _resolve_git_exe():
         if os.path.exists(d):
             candidates.append(d)
     for c in candidates:
-        if os.path.isfile(c):
-            return c
+        try:
+            if c and os.path.isfile(c):
+                return c
+        except OSError:
+            continue
     return "git"  # 最后兜底：留给 PATH 正常的环境（Linux/macOS）
 
 

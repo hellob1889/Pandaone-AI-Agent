@@ -24,6 +24,36 @@ TEMPLATE = ROOT / "templates" / "pre-commit-hook"
 CHECK_SCRIPT = ROOT / "templates" / "pre-commit-check.py"
 
 
+def _write_git_exe_hint(pandaone_dir: Path) -> None:
+    """把 git 的绝对路径固化到 .pandaone/git_exe.txt。
+
+    为什么必须"安装时"做这件事：
+      pre-commit hook 运行在 Git for Windows 的 MSYS 环境里，PATH 中**含非
+      ASCII 字符**的目录项（典型：D:\\软件\\Git\\cmd）会被转码成 mojibake，
+      hook 内部既找不到 git，也没法从 GIT_EXEC_PATH 反推（GIT_EXEC_PATH
+      同样是 mojibake）。
+
+      唯一能拿到**未损坏**路径的时刻是安装时刻——一个 PATH 完好的普通
+      进程。于是这里解析一次、固化到 hook 旁边，运行时就只需要读文件。
+      （不写死任何人的机器路径：写的是**这台机器**上真实存在的 git。）
+    """
+    git_exe = None
+    try:
+        from pandaone.git_installer import _find_git_executable
+
+        git_exe = _find_git_executable()
+    except Exception:
+        git_exe = None
+    if not git_exe:
+        git_exe = shutil.which("git")
+    if not git_exe:
+        return
+    try:
+        (pandaone_dir / "git_exe.txt").write_text(git_exe, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def install_hook(root: Path) -> int:
     """安装 pre-commit hook"""
     git_hooks = root / ".git" / "hooks"
@@ -41,6 +71,8 @@ def install_hook(root: Path) -> int:
     pandaone_dir.mkdir(parents=True, exist_ok=True)
     if CHECK_SCRIPT.exists():
         shutil.copy(CHECK_SCRIPT, pandaone_dir / "pre-commit-check.py")
+    # 固化 git 绝对路径：hook 运行时的 PATH 不可信（MSYS 转码会破坏中文路径）
+    _write_git_exe_hint(pandaone_dir)
 
     hook_path = git_hooks / "pre-commit"
     if hook_path.exists():

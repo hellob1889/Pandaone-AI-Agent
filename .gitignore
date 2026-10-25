@@ -96,3 +96,6 @@ desktop.ini
 
 # Smithery 提交草稿（付费平台，按"需要收费的不做"原则不入仓）
 smithery_*.html
+
+# git worktree 检出目录（架构对照实验用；里面是嵌套仓库，切勿误提交）
+.worktrees/

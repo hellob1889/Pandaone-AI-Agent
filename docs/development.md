@@ -385,3 +385,35 @@ v0.7.31.0 的 Ubuntu CI 连续红两次，挖出三类**静默失真**型平台�
 
 v0.7.31.0 之前这里产出的是 `target/.git/` 嵌套布局：跟文档里承诺的恢复方式对不上，
 四种 clone 方式实测全 rc=128 —— 属于"照着文档恢复不出来"的坏布局。
+
+### 7.10 Git for Windows 的 hook 环境是"敌意环境"—— 找不到 git 不是意外
+
+pre-commit hook 里凡是"找外部工具"的地方，都必须假设 PATH 是坏的。
+
+**实测事实**（Git for Windows，真实 hook 触发时打印的环境）：
+
+| 探针 | hook 里的实际值 | 后果 |
+|---|---|---|
+| `PATH` | 被重写成 MSYS 风格 | `shutil.which("git")` 按 Windows 语义拼 PATH，必然找不到 |
+| PATH 里含非 ASCII 的项 | `D:/软件/Git/cmd` → mojibake `D:/鏉瀄ue.../Git/cmd` | 该路径在磁盘上根本不存在 |
+| `GIT_EXEC_PATH` | 同样是 mojibake | 从它反推安装根的候选全部 `isfile=False` |
+| `tr` / `grep` | command not found | hook 里连 coreutils 都未必有 |
+
+**关键推论**：hook 运行环境里**没有任何一个来源**能拿到未损坏的外部工具路径——
+含非 ASCII 的 PATH 项被转码坏了，`GIT_EXEC_PATH` 也坏了。
+注意"没转码坏的那些项"（比如 `C:/Program Files/Python311`）是好的：
+所以 hook 里 `python` 能启动、只有 `git` 找不到 —— 这种**半残**环境最误导人。
+
+**唯一可靠的来源是"安装时刻"**：一个 PATH 完好的普通进程。
+所以 `pandaone install-hook` 解析一次 git 绝对路径，写进 `.pandaone/git_exe.txt`，
+hook 运行时只读这个文件（失效时自动降级到下一级候选）。
+
+**铁律**：
+
+1. **不要在 hook 里"现场推断"外部工具路径** —— 能装的时候解析一次，固化成文件。
+2. **模板里禁止出现任何具体机器路径**（含作者自己的 `D:/软件/Git/...`）：
+   那条路径在别人机器上不存在；而且它"恰好能用"会**掩盖真实缺陷**——
+   v0.7.31.0 删掉它之后，Windows 上 hook 立刻找不到 git，门禁静默失效。
+3. **删掉硬编码路径 ≠ 修好了**：必须**在 Windows 上真跑一次 hook**。
+   CI 只跑 ubuntu，Windows 的 hook 环境与 Linux 完全不同；
+   这次若没有 Windows 侧对照实验，就会把一个"更通用但更不可靠"的实现推上线。
