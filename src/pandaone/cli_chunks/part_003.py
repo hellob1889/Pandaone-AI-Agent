@@ -380,6 +380,14 @@ def cmd_write(args):
             import hashlib
             new_sha = hashlib.sha256(target.read_bytes()).hexdigest()
             _update_binary_snapshot(root, target_rel, new_sha)
+        elif args.from_file:
+            # v0.7.34.0: text branch now supports --from-file as well
+            # (--help says 'binary or text both work' but it was binary-only)
+            src_txt = Path(args.from_file)
+            if not src_txt.exists():
+                raise FileNotFoundError(f'from-file not found: {args.from_file}')
+            new_content = src_txt.read_text(encoding='utf-8')
+            target.write_text(new_content, encoding='utf-8')
         elif args.content:
             # 文本整文件模式
             # v0.7.15: 新建文件没有原文，original_content 置空
