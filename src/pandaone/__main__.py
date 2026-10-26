@@ -5,9 +5,78 @@ PR #28 在这里加两件事:
   2. Monkey-patch: 注册 `pandaone doctor` 子命令 (cmd_doctor.py)。
      因为 cli.py 84KB 超大,MCP 单次推送限制 ~24KB,改 cli.py 不便。
      这里 monkey-patch 注册避免动 cli.py。
+
+v0.7.23 新增（同样的 monkey-patch 套路，理由同上 —— 不动 cli_chunks 大文件）:
+  - `pandaone setup`        (cmd_setup.py)      一键本地部署
+  - `pandaone upgrade`      (cmd_upgrade.py)    一键升级
+  - `pandaone backup`       (cmd_backup.py)     纯本地备份
+  - `pandaone install-mcp`  (cmd_install_mcp.py) 注册 MCP 服务器
+  - `pandaone init --with-git`                 顺带初始化本地 git 仓库
 """
 import os
 import sys
+
+#: v0.7.23 新增的独立子命令模块（每个模块导出 COMMAND_NAME / add_parser / handler）
+_EXTRA_COMMAND_MODULES = (
+    "cmd_setup",
+    "cmd_upgrade",
+    "cmd_backup",
+    "cmd_install_mcp",
+)
+
+_EXTRA_MODULES = None
+
+
+def _load_extra_modules():
+    """加载新增子命令模块（逐个 try，单个失败不影响其它）。"""
+    global _EXTRA_MODULES
+    if _EXTRA_MODULES is not None:
+        return _EXTRA_MODULES
+    import importlib
+
+    mods = []
+    for name in _EXTRA_COMMAND_MODULES:
+        try:
+            mods.append(importlib.import_module(f"pandaone.{name}"))
+        except ImportError as e:
+            print(f"[WARN] failed to load command module {name}: {e}", file=sys.stderr)
+    _EXTRA_MODULES = mods
+    return mods
+
+
+def _patch_init_with_git(cli):
+    """给 `pandaone init` 加 `--with-git`：顺带初始化本地 git 仓库。
+
+    为什么需要: L2 看门狗的自动回滚依赖 `git checkout`，所以必须有 git 仓库
+    和 baseline commit。但 `pandaone init` 不检查也不创建 git 仓库 ——
+    用户以为 init 完事，实际 L2 是哑的（doctor 里显示 DISABLED - requires git）。
+    """
+    if getattr(cli, "_pandaone_init_git_patched", False):
+        return
+    orig_init = cli.COMMANDS.get("init")
+    if orig_init is None:
+        return
+
+    def _cmd_init(args):
+        rc = orig_init(args)
+        if rc == 0 and getattr(args, "with_git", False):
+            from pathlib import Path
+
+            from pandaone import git_ops
+            from pandaone.i18n import t
+
+            root = Path(getattr(args, "root", ".") or ".").resolve()
+            try:
+                _created, m1 = git_ops.init_repo(root)
+                _wrote, m2 = git_ops.ensure_repo_identity(root)
+                _committed, m3 = git_ops.baseline_commit(root)
+                print(t("init_with_git_done", msg=" / ".join([m1, m2, m3])))
+            except Exception as e:
+                print(t("init_with_git_fail", err=str(e)))
+        return rc
+
+    cli.COMMANDS["init"] = _cmd_init
+    cli._pandaone_init_git_patched = True
 
 
 def _ensure_doctor_registered():
@@ -39,6 +108,16 @@ def _ensure_doctor_registered():
     if "doctor" not in cli.COMMANDS:
         cli.COMMANDS["doctor"] = cmd_doctor
 
+    # v0.7.23: 注册新增的独立子命令（setup / upgrade / backup / install-mcp）
+    for _mod in _load_extra_modules():
+        try:
+            name = getattr(_mod, "COMMAND_NAME", None)
+            handler = getattr(_mod, "handler", None)
+            if name and handler:
+                cli.COMMANDS[name] = handler
+        except Exception as e:
+            print(f"[WARN] failed to register command: {e}", file=sys.stderr)
+
     # 2. Monkey-patch build_parser,自动加 doctor subparser
     if getattr(cli, "_pandaone_doctor_patched", False):
         return  # 防止重复 patch
@@ -59,10 +138,34 @@ def _ensure_doctor_registered():
             except Exception as e:
                 if "conflicting" not in str(e).lower() and "already" not in str(e).lower():
                     raise
+            # v0.7.23: 新增子命令的 subparser
+            for _mod in _load_extra_modules():
+                try:
+                    _mod.add_parser(sub_action)
+                except Exception as e:
+                    if "conflicting" not in str(e).lower() and "already" not in str(e).lower():
+                        raise
+            # v0.7.23: init --with-git
+            try:
+                _init_p = sub_action.choices.get("init")
+                if _init_p is not None and not getattr(
+                    _init_p, "_pandaone_with_git", False
+                ):
+                    _init_p.add_argument(
+                        "--with-git",
+                        action="store_true",
+                        help="同时初始化本地 git 仓库并创建 baseline commit（L2 回滚依赖它）",
+                    )
+                    _init_p._pandaone_with_git = True
+            except Exception:
+                pass
         return parser
 
     cli.build_parser = _patched_build_parser
     cli._pandaone_doctor_patched = True
+
+    # v0.7.23: init --with-git 的 handler 包装
+    _patch_init_with_git(cli)
 
 
 def _git_gate():

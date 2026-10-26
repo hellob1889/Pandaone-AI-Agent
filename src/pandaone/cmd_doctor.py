@@ -20,9 +20,29 @@ cmd_doctor.py — `pandaone doctor` 子命令 (PR #28)
 from __future__ import annotations
 
 import json as _json
+import os as _os
 import shutil as _shutil
 import sys as _sys
 from pathlib import Path as _Path
+
+
+def _check_layer8_path_conflict() -> dict:
+    """v0.7.28.0: 检出 PATH 里**其它**的 pandaone 可执行文件。
+
+    背景（真机实测，非推理）：Windows 的 PATH 拼接规则是
+    「机器级 PATH + 用户级 PATH」，**机器级在前**。pip 版 pandaone 装在
+    `Python\\Scripts\\`（常常在机器级 PATH 里），即使用户级 PATH 已经把
+    exe 版的 `%LOCALAPPDATA%\\Pandaone` 前置到首位，敲 `pandaone` 命中的
+    仍然是旧 pip 版 —— 用户体感就是"装了新版没生效"。
+
+    委托给 `path_conflicts` 模块（doctor 与 setup 共用同一套判定）。
+    只做**只读**探测：不执行任何外部 exe，只列出冲突路径。
+    """
+    try:
+        from pandaone import path_conflicts as _pc
+        return _pc.describe_conflicts()
+    except Exception as e:  # 探测失败不该让 doctor 崩
+        return {"ok": True, "note": f"path conflict check unavailable: {e}"}
 
 
 def _check_layer4_startup() -> dict:
@@ -70,10 +90,13 @@ def _check_layer5_self_fingerprint() -> dict:
 
 def _check_layer6_tamper_detection() -> dict:
     """v0.7.19: 真查 .pandaone/pandaone.jsonl audit log 状态 (替代 L6 字面量 'OK')"""
-    # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
-    # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
-    repo_root = _Path(__file__).resolve().parent.parent.parent
-    audit_log = repo_root / '.pandaone' / 'pandaone.jsonl'
+    # v0.7.24: 审计日志是**项目级**的，应该在当前工作目录找，而不是包的安装目录。
+    #   打包成 .exe 之后包目录里根本没有 .pandaone/，只查包目录永远显示 "clean state"，
+    #   会把"项目里的审计日志存在大量 REJECTED"这种真实信号掩盖掉。
+    candidates = [_Path.cwd() / '.pandaone' / 'pandaone.jsonl']
+    pkg_root = _Path(__file__).resolve().parent.parent.parent
+    candidates.append(pkg_root / '.pandaone' / 'pandaone.jsonl')
+    audit_log = next((c for c in candidates if c.exists()), candidates[0])
     if not audit_log.exists():
         return {"ok": True, "note": "no audit log yet (clean state)"}
     try:
@@ -90,6 +113,11 @@ def _check_layer6_tamper_detection() -> dict:
 
 def _check_layer7_ci_audit() -> dict:
     """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)"""
+    # v0.7.24: 打包成 .exe 之后没有 .github/workflows/audit.yml ——
+    # CI 配置属于源码仓库，不进安装包。这里报 N/A 而不是 FAIL，
+    # 否则 doctor 在打包态永远是红的，掩盖真正的问题。
+    if getattr(_sys, "_MEIPASS", None):
+        return {"ok": True, "note": "not applicable (packaged build; CI workflow lives in the source repo)"}
     # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
     # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
     repo_root = _Path(__file__).resolve().parent.parent.parent
@@ -109,11 +137,15 @@ def add_doctor_parser(sub_parsers_action):
     """把 doctor subparser 注册到给定的 subparsers action 上。"""
     doctor_p = sub_parsers_action.add_parser(
         "doctor",
-        help="system health check (git / Python / 7-layer defenses)"
+        help="system health check (git / Python / 8-layer defenses)"
     )
     doctor_p.add_argument(
         "--install-git", action="store_true",
         help="auto-install git if missing"
+    )
+    doctor_p.add_argument(
+        "--clean-conflicts", action="store_true",
+        help="rename older pandaone binaries that shadow the `pandaone` command"
     )
     doctor_p.add_argument(
         "--json", action="store_true",
@@ -131,6 +163,32 @@ def cmd_doctor(args):
 
     want_install = getattr(args, 'install_git', False)
     want_json = getattr(args, 'json', False)
+    # 注意：必须用 `is True` 严格判断 —— 调用方传 mock.Mock() 时，
+    # 未显式设置的属性访问会返回 truthy 的 Mock 对象，`if getattr(...)` 会误入分支。
+    want_clean = getattr(args, 'clean_conflicts', False) is True
+
+    if want_clean:
+        # v0.7.28.0: 清理 PATH 里抢占命令的旧版 pandaone。
+        #   放在 doctor 里是因为它本来就是"诊断 + 修复"工具（已有 --install-git 先例），
+        #   安装器安装完直接调 `doctor --clean-conflicts`，不引入新子命令。
+        try:
+            from pandaone.cmd_setup import clean_path_conflicts as _clean
+            status, msg = _clean()
+            if want_json:
+                print(_json.dumps({'step': 'clean_conflicts', 'status': status,
+                                   'message': msg}, ensure_ascii=False))
+            else:
+                print(f'[{"OK" if status == "ok" else status.upper()}] {msg}')
+        except Exception as e:
+            if want_json:
+                print(_json.dumps({'step': 'clean_conflicts', 'status': 'warn',
+                                   'error': str(e)}, ensure_ascii=False))
+            else:
+                print(f'[WARN] {e}')
+        if want_json:
+            report = _collect_report()
+            print(_json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
 
     report = _collect_report()
     git_status = report['git']
@@ -204,7 +262,11 @@ def _collect_report():
         from pandaone import __version__ as pver
     except Exception:
         pver = "unknown"
-    pandaone_section = {"version": pver, "executable": _shutil.which("pandaone")}
+    # frozen (.exe): sys.executable 就是 pandaone.exe 本身。which("pandaone")
+    # 指向的是 PATH 里的另一份（比如 site-packages 装的），会误导用户以为在查那个。
+    _exe = (_sys.executable if getattr(_sys, "_MEIPASS", None)
+            else _shutil.which("pandaone"))
+    pandaone_section = {"version": pver, "executable": _exe}
 
     layers = {
         "L1_file_lock": {"ok": True, "note": "python-only (attrib/chmod)"},
@@ -220,6 +282,7 @@ def _collect_report():
         "L5_self_fingerprint": _check_layer5_self_fingerprint(),
         "L6_tamper_detection": _check_layer6_tamper_detection(),
         "L7_ci_audit": _check_layer7_ci_audit(),
+        "L8_path_conflict": _check_layer8_path_conflict(),
     }
 
     return {
@@ -267,3 +330,9 @@ def _print_human_report(report):
             print(t('_doctor_run_install_git'))
         if py['too_old']:
             print(t('_doctor_upgrade_python', required=py['required']))
+
+    # L8: PATH 冲突 —— 装完新版却仍命中旧版时，这里会直接点名路径
+    l8 = report['layers'].get('L8_path_conflict') or {}
+    for p in (l8.get('shadow') or []):
+        print(t('_doctor_path_conflict', path=p))
+        print(t('_doctor_path_conflict_hint'))

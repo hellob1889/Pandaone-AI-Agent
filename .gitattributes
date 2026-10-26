@@ -9,3 +9,17 @@ pre-commit-hook text eol=lf
 *.json          text eol=lf
 *.yml           text eol=lf
 *.yaml          text eol=lf
+# v0.7.26 补齐：L3 受保护扩展名清单里的这些此前没有 eol 规则，
+# 而 `pandaone write` 的文本回写走 write_text()（Windows 上 LF → CRLF），
+# 没有规则的文件会以 CRLF 进库。*.ps1 尤其重要（shell 脚本同样怕 CRLF）。
+*.toml          text eol=lf
+*.cfg           text eol=lf
+*.ini           text eol=lf
+*.env           text eol=lf
+*.rst           text eol=lf
+*.txt           text eol=lf
+*.html          text eol=lf
+*.css           text eol=lf
+*.js            text eol=lf
+*.ts            text eol=lf
+*.ps1           text eol=lf

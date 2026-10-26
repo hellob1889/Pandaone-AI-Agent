@@ -11,14 +11,73 @@ def cmd_serve(args):
     return run_blocking(root, port=port)
 
 
+def _load_install_hook_module():
+    """加载 install_hook 模块，冻结形态下必须从磁盘按路径加载。
+
+    为什么不能用 `from pandaone.install_hook import ...`:
+      冻结包的模块表（PYZ）里**没有** pandaone.install_hook —— 它只作为
+      "数据文件"被整棵树拷进 _internal/pandaone/（见 build_pyinstaller.py 的
+      package_data_args()），静态 import 会直接 ImportError。
+
+    为什么不能用 `sys.executable -m pandaone.install_hook`:
+      冻结形态下 sys.executable 就是 pandaone.exe 本身，没有 "-m 模块执行"
+      语义 —— argparse 会把 "pandaone.install_hook" 当成子命令名，于是报
+      "invalid choice: 'pandaone.install_hook'"。
+      （真机装 0.7.32.0 时实测到的真 bug；cmd_setup / cmd_upgrade /
+      pandaone_mcp 早就有 frozen 感知，只有这条漏了。）
+
+    所以：从 _internal/pandaone/install_hook.py 按文件路径加载。这样模块内的
+    ROOT = Path(__file__).parent / "templates" 才会指向**冻结包内**那份模板，
+    而不是源码树里的。
+    """
+    import importlib.util
+
+    # 冻结形态：install_hook.py 在 exe 同级的 _internal/pandaone/ 下
+    candidates = []
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+        candidates.append(base / "_internal" / "pandaone" / "install_hook.py")
+    # 源码形态：模块在包里，直接 import 即可
+    candidates.append(Path(__file__).resolve().parent.parent / "install_hook.py")
+
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            spec = importlib.util.spec_from_file_location("pandaone.install_hook", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception:
+            continue
+    return None
+
+
 def cmd_install_hook(args):
     """安装/卸载 pre-commit hook。委托给 install_hook.py"""
     import subprocess
+    if getattr(sys, "frozen", False):
+        # 冻结形态：进程内直接调用（sys.executable -m 在 exe 形态下无模块执行语义）
+        module = _load_install_hook_module()
+        if module is None:
+            print(t("err_hook_module_missing"), file=sys.stderr)
+            return 1
+        root = Path(args.root).resolve()
+        try:
+            if getattr(args, "uninstall", False):
+                return module.uninstall_hook(root)
+            return module.install_hook(root)
+        except Exception as e:
+            print(t("err_hook_install", err=str(e)), file=sys.stderr)
+            return 1
     cmd = [sys.executable, "-m", "pandaone.install_hook", "--root", args.root]
     if getattr(args, "uninstall", False):
         cmd.append("--uninstall")
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=10)
         print(r.stdout, end="")
         if r.stderr:
             print(r.stderr, end="", file=sys.stderr)
@@ -52,13 +111,44 @@ def cmd_install_git(args):
     else:
         cands = []
     for cand in cands:
-        if Path(cand, "git.exe").exists():
-            print(t("git_probe_found", path=cand))
-            return 0
+        git_exe = Path(cand, "git.exe")
+        if not git_exe.exists():
+            continue
+        # v0.7.22 P1-1 fix: 候选目录命中后再用 _can_run_git() 验证真能执行 ——
+        # 0 字节占位文件 / 被杀软隔离的 git.exe 之前会被误判成"已安装",
+        # 然后 L2/L3 静默失效, 用户以为防护装好了其实没有。
+        try:
+            from pandaone.git_installer import _can_run_git
+            if not _can_run_git(str(git_exe)):
+                continue
+        except ImportError:
+            pass
+        print(t("git_probe_found", path=str(git_exe)))
+        return 0
     print(t("git_not_installed"))
+    # v0.7.22 P1-1 fix: 接上 git_installer —— 之前 cmd_install_git 只探测不安装,
+    # 自己写的 _install_windows()(winget → choco) 是死代码, 跑 install-git 永远装不上。
+    # 同时让 --probe-only 真正生效(之前注册了这个参数却从没被读过)。
+    if getattr(args, "probe_only", False):
+        return 1
     if getattr(args, "auto_download", False):
         return _download_portable_git()
-    return 1
+    try:
+        from pandaone.git_installer import install as _git_install, GitInstallError
+    except ImportError:
+        return 1
+    try:
+        result = _git_install()
+    except GitInstallError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        try:
+            from pandaone.git_installer import get_install_hint
+            print(get_install_hint())
+        except ImportError:
+            pass
+        return 1
+    print(t("git_installed", path=result.path))
+    return 0
 
 
 def _download_portable_git():
@@ -120,10 +210,33 @@ def cmd_watch(args):
             cmd = [sys.executable, "-m", "pandaone_guard", "--root", str(root), "--daemon"]
         p = subprocess.Popen(cmd, env={**os.environ, "PYTHONUNBUFFERED": "1"}, **kwargs)
         pid_path = pandaone_dir / ".watchdog_pid"
-        for _ in range(20):
+        # v0.7.22 P1-4 fix: 之前 Popen 完不看进程活没活, 无条件 print "已在后台启动"
+        # 并 return 0 —— 用户实测遇到过"报告启动成功但查不到进程"。
+        # 现在: 子进程提前退出, 或等待后 pid 文件仍未生成, 都算失败并明确报错。
+        for _ in range(50):          # 最多等 5s 给子进程写 pid 文件
             if pid_path.exists():
                 break
+            if p.poll() is not None:  # 子进程已退出 → 启动失败
+                break
             time.sleep(0.1)
+        if p.poll() is not None:
+            print(t("watch_daemon_failed"), file=sys.stderr)
+            print(f"  exit code: {p.returncode}", file=sys.stderr)
+            log_file_path = pandaone_dir / "watchdog.log"
+            if log_file_path.exists():
+                try:
+                    tail = log_file_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines()[-10:]
+                    for line in tail:
+                        print(f"  {line}", file=sys.stderr)
+                except Exception:
+                    pass
+            return 1
+        if not pid_path.exists():
+            print(t("watch_daemon_failed"), file=sys.stderr)
+            print(t("watch_daemon_no_pid"), file=sys.stderr)
+            return 1
         print(t("watch_daemon_started"))
         return 0
     sys.path.insert(0, str(ROOT))
@@ -148,7 +261,9 @@ def cmd_ci(args):
     GIT = git_exe_path
     def _git_run(*args, timeout=5):
         try:
-            return subprocess.run([GIT] + list(args), cwd=str(root), capture_output=True, text=True, timeout=timeout)
+            return subprocess.run([GIT] + list(args), cwd=str(root), capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
     if not pandaone_dir.exists():

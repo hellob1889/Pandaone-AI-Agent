@@ -59,12 +59,14 @@ VERSION=""
 WHEEL_PATH=""
 FORCE=0
 SKIP_HOOK=0
+SKIP_MCP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)    VERSION="$2"; shift 2 ;;
         --wheel-path) WHEEL_PATH="$2"; shift 2 ;;
         --force)      FORCE=1; shift ;;
         --skip-hook)  SKIP_HOOK=1; shift ;;
+    --skip-mcp)   SKIP_MCP=1; shift ;;
         -h|--help)
             sed -n '2,30p' "$0"; exit 0 ;;
         *) err "Unknown arg: $1"; exit 1 ;;
@@ -290,7 +292,19 @@ else
     printf "${C_YELLOW}[SKIP] git hook (per --skip-hook)${C_RESET}\n"
 fi
 
-# ---- 9. 提示下一步 ----
+# ---- 9. 注册 MCP server（可用 --skip-mcp 跳过）----
+if [[ "$SKIP_MCP" -eq 0 ]]; then
+    printf "${C_CYAN}[9/10] 注册 MCP server 到 IDE 配置（Claude Desktop / Cursor / Trae）...${C_RESET}\n"
+    if "$VENV_BIN/pandaone" install-mcp --client auto; then
+        printf "${C_GREEN}[OK] MCP server 注册完成${C_RESET}\n"
+    else
+        printf "${C_YELLOW}[WARN] MCP 注册失败，可稍后手动执行: pandaone install-mcp${C_RESET}\n"
+    fi
+else
+    printf "${C_YELLOW}[SKIP] MCP 注册 (per --skip-mcp)${C_RESET}\n"
+fi
+
+# ---- 10. 提示下一步 ----
 echo ""
 printf "${C_CYAN}═══════════════════════════════════════════════════${C_RESET}\n"
 printf "${C_GREEN} Installation complete!${C_RESET}\n"
@@ -303,6 +317,7 @@ echo ""
 printf "${C_CYAN}下一步 / Next steps (新开终端 / new terminal):${C_RESET}\n"
 echo "  pandaone doctor              # 环境检查"
 echo "  pandaone install-hook        # 安装 git pre-commit hook"
+echo "  pandaone install-mcp         # 注册 MCP server 到 IDE (Claude/Cursor/Trae)"
 echo "  pandaone --help              # 全部命令"
 echo ""
 printf "${C_CYAN}升级 / Upgrade:${C_RESET}\n"

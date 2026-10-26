@@ -5,9 +5,9 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / 'src'
-for _k in list(sys.modules.keys()):
-    if _k == 'pandaone' or _k.startswith('pandaone.'):
-        del sys.modules[_k]
+# v0.7.22 fix: 原来这里在**模块顶层** del sys.modules['pandaone*']，
+#   会造成模块对象分裂（详见 test_status_pid_alive.py 同处注释）。
+#   conftest.py 已保证 src/ 优先，不再需要删缓存。
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

@@ -5,9 +5,13 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / 'src'
-for _k in list(sys.modules.keys()):
-    if _k == 'pandaone' or _k.startswith('pandaone.'):
-        del sys.modules[_k]
+# v0.7.22 fix: 原来这里在**模块顶层** del sys.modules['pandaone*']，
+#   目的是绕开 site-packages 里的旧副本。但 conftest.py 已把 src/ 插到
+#   sys.path[0]，旧副本本来就抢不到 import —— 而"删缓存"会制造
+#   **模块对象分裂**：字母序更早收集的测试模块仍持有旧对象，
+#   后续 patch("pandaone.git_installer.X") 打到新对象上，mock 静默失效
+#   （test_git_installer 3 个用例就是这么被污染成失败的）。
+#   所以这里不再删缓存。
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 

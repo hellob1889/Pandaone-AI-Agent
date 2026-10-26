@@ -12,58 +12,103 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 # ============================================================
-# ============================================================
 # 自指纹保护（L5 防御）
 # ============================================================
-# 默认密码(本地使用)。生产/CI 可通过环境变量 PANDAX_FP_PASSWORD 覆盖
-# ——源码不再含"权威"明文。
+# v0.7.23: 指纹与密码策略迁到独立模块 pandaone/fp_security.py。
+#   原因: cli_chunks 单文件有 24KB 推送上限(MCP 单次推送限制),
+#   而"可改密 + 常量时间比较 + 失败锁定 + 全包目录 manifest"
+#   会持续膨胀。内聚到独立模块后, 本文件只留同名薄封装,
+#   chunk 内部与外部(part_004/part_006/cmd_doctor)的调用点保持不变。
+from pandaone.fp_security import (
+    get_fingerprint_password as _fp_get_password,
+    verify_password as _fp_verify_password,
+    fp_lock_state as _fp_lock_state,
+    register_failure as _fp_register_failure,
+    clear_failures as _fp_clear_failures,
+    reset_lock as _fp_reset_lock,
+    set_fingerprint_password as _fp_set_password,
+    clear_fingerprint_password as _fp_clear_password,
+)
+
+# 默认密码保留 "0000" —— 用户明确要求**必须有默认值**,
+# 用户可自行改密(见 get_fingerprint_password 的优先级)。
 _DEFAULT_FP_PASSWORD = "0000"
 
 
 def get_fingerprint_password() -> str:
     """读取 CLI 自指纹更新密码。
 
-    优先级:
-      1. 环境变量 PANDAX_FP_PASSWORD(生产 / CI / 多用户场景可覆盖)
-      2. 默认值 "0000"(本地单用户)
+    优先级（高 → 低）:
+      1. 环境变量 PANDAONE_FP_PASSWORD（新名，推荐）
+      2. 环境变量 PANDAX_FP_PASSWORD（旧名，已废弃，仅兼容存量脚本）
+      3. 配置文件 ~/.pandaone/fp_password（用户自设，0600）
+      4. 默认 "0000"（必须存在的默认值）
 
-    说明:返回动态值而非常量,目的是在不改 API 的前提下让"密码走变量"。
-    后续如需更复杂策略(配置文件 / 命令行 / KMS)只需改本函数。
+    详见 pandaone/fp_security.py。
     """
-    return os.environ.get("PANDAX_FP_PASSWORD", _DEFAULT_FP_PASSWORD)
+    return _fp_get_password()
 
 
 def compute_fingerprint() -> str:
-    """v0.7.20 P0-2 fix: 算 pandaone/ 全部 .py 文件的多文件 SHA256 hash.
+    """v0.7.23: 整个包目录（pandaone/ + pandaone_guard/）的聚合 SHA256。
 
-    旧版 (v0.7.9~v0.7.19) 只哈希 Path(__file__).read_bytes() 一个文件,
-    改任意其他 part (part_001/003/004/005/006 等) 都不影响 fingerprint,
-    L5 自校验被绕过.
+    演进:
+      v0.7.9 ~ v0.7.19  只哈希 cli.py 一个文件 → 改任意 chunk 都绕过
+      v0.7.20 ~ v0.7.22 哈希 pandaone/ 下全部 *.py → 改资源文件仍绕过
+      v0.7.23            哈希两个包目录下的**全部文件** → templates/、
+                         installer/、index.html、banner.txt、*.ico 也在内
 
-    新版: rglob("*.py") 走 pandaone/ 整目录, 按相对路径排序 deterministic,
-    改任意 .py 文件都改变 hash, 改文件名/新增/删除文件也改变 hash.
-    升级 v0.7.20 后装机用户需手动跑 pandaone --update-fingerprint 重算.
+    排除 __pycache__/、*.pyc 等运行时产物（否则指纹每次运行都变）。
+    实现见 pandaone/fp_security.py。
     """
-    import importlib.util
-    try:
-        _spec = importlib.util.find_spec("pandaone.cli_chunks.part_002")
-        _here = Path(_spec.origin).resolve()
-    except Exception:
-        _here = Path(__file__).resolve()
-    pandaone_root = _here.parent.parent
-    files = sorted(p for p in pandaone_root.rglob("*.py") if p.is_file())
-    h = hashlib.sha256()
-    for f in files:
-        rel = str(f.relative_to(pandaone_root))
-        h.update(rel.encode("utf-8"))
-        h.update(b"\x00")
-        h.update(f.read_bytes())
-        h.update(b"\x00")
-    return h.hexdigest()
+    from pandaone import fp_security as _fpsec
+
+    return _fpsec.compute_fingerprint()
 
 
 def _get_pandaone_version() -> str:
-    """v0.7.21.2: 取 pandaone 当前安装版本（指纹绑定用）."""
+    """v0.7.21.2: 取 pandaone 当前安装版本（指纹绑定用）。
+    v0.7.22 fix: 源码树运行（开发模式）时必须取**源码里的 pyproject.toml 版本**,
+    不能取 site-packages 的已安装版本 —— 否则改了源码但没重新安装时,
+    版本号不变 → 指纹变化被判定成"篡改" → 所有子命令全挂。
+    逻辑与 pandaone/__init__.py 的版本解析保持一致（源码 pyproject → metadata → 兜底）。
+    """
+    # 0. PyInstaller frozen (打包成 .exe)：既没有 pyproject.toml，也没有安装元数据。
+    #    版本号由 build_pyinstaller.py 注入 _MEIPASS/pandaone/_build_info.py。
+    try:
+        import sys as _sys
+        _mepass = getattr(_sys, "_MEIPASS", None)
+        if _mepass:
+            _bi = Path(_mepass) / "pandaone" / "_build_info.py"
+            if _bi.is_file():
+                import re as _re2
+                _m2 = _re2.search(
+                    r'__version__\s*=\s*"([^"]+)"',
+                    _bi.read_text(encoding="utf-8"),
+                )
+                if _m2:
+                    return _m2.group(1)
+    except Exception:
+        pass
+    # 1. 源码树优先
+    try:
+        import importlib.util
+        import re as _re
+        _spec = importlib.util.find_spec("pandaone.cli_chunks.part_002")
+        if _spec and _spec.origin:
+            _repo_root = Path(_spec.origin).resolve().parents[3]  # .../<repo>/src/pandaone/cli_chunks/x.py
+            _pyproject = _repo_root / "pyproject.toml"
+            if _pyproject.is_file():
+                _m = _re.search(
+                    r'^\s*version\s*=\s*"([^"]+)"\s*$',
+                    _pyproject.read_text(encoding="utf-8"),
+                    _re.MULTILINE,
+                )
+                if _m:
+                    return _m.group(1)
+    except Exception:
+        pass
+    # 2. 已安装包元数据
     try:
         import importlib.metadata as _imd
         return _imd.version("pandaone-guard")
@@ -72,23 +117,21 @@ def _get_pandaone_version() -> str:
 
 
 def _now_iso() -> str:
-    """v0.7.21.2: ISO 8601 UTC 时间戳."""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """ISO 8601 UTC 时间戳（委托 fp_security）。"""
+    from pandaone import fp_security as _fpsec
+
+    return _fpsec._now_iso()
 
 
 def _save_fp(version: str, hash_hex: str) -> None:
-    """v0.7.21.2: 存指纹到 FP_PATH (json 格式)."""
-    import json as _json
-    data = {
-        "version": version,
-        "hash": hash_hex,
-        "stored_at": _now_iso(),
-    }
-    FP_PATH.write_text(
-        _json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    """v0.7.21.2: 存指纹到 FP_PATH (json 格式).
+
+    v0.7.23: 实现下沉到 fp_security.save_fp；这里仍以 FP_PATH 为准，
+    保证测试用 mock.patch.object(part_002, "FP_PATH") 依然生效。
+    """
+    from pandaone import fp_security as _fpsec
+
+    _fpsec.save_fp(version, hash_hex, path=FP_PATH)
 
 
 def _load_fp():
@@ -98,19 +141,9 @@ def _load_fp():
         (version, hash, migrated: bool)
         migrated=True 表示从旧裸 hex 迁移到新 json
     """
-    import json as _json
-    raw = FP_PATH.read_text(encoding="utf-8").strip()
-    # 尝试 json 解析
-    try:
-        data = _json.loads(raw)
-        if isinstance(data, dict) and "version" in data and "hash" in data:
-            return data["version"], data["hash"], False
-    except (ValueError, _json.JSONDecodeError):
-        pass
-    # 旧格式: 裸 hex 64 字符, 走迁移流程
-    if len(raw) == 64 and all(c in "0123456789abcdef" for c in raw.lower()):
-        return "0.0.0+legacy", raw, True
-    raise ValueError(f"FP file corrupted: {raw[:80]!r}")
+    from pandaone import fp_security as _fpsec
+
+    return _fpsec.load_fp(path=FP_PATH)
 
 
 def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
@@ -178,7 +211,31 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
             print(t("info_fp_auto_refreshed", old_version=stored_version, new_version=current_version, hash=current[:16]))
         return True
 
+    # 运行形态切换 → auto-refresh
+    #   源码树 / pip 安装版  <->  PyInstaller 打包的 .exe 版
+    # 两者文件集合不同（.exe 里没有 .py 源码，源码树里有 _build_info.py），
+    # 指纹必然不同，但这是**合法部署行为**，不是篡改。
+    #   没有这一分支的话：用户装完 .exe 第一次跑就会被 L5 判篡改 → CLI 全锁死。
+    from pandaone import fp_security as _fpsec
+
+    try:
+        _rec = _fpsec.load_fp_record(path=FP_PATH)
+        stored_form = _rec.get("form") or _fpsec.FORM_SOURCE
+    except Exception:
+        stored_form = _fpsec.FORM_SOURCE
+    current_form = _fpsec.fp_form()
+    if stored_form != current_form:
+        _save_fp(current_version, current)
+        if not silent:
+            print(t("info_fp_form_refreshed", old_form=stored_form, new_form=current_form, hash=current[:16]))
+        return True
+
     # 同版本号 + hash 变 = 真篡改
+    # v0.7.22: 这里**不**给源码树模式开豁免。
+    #   L5 的核心承诺是"agent 改了 pandaone 本体跳过审计，必须能检测到"，
+    #   而 agent 完全可能在源码树上跑 —— 开发模式同样要检。
+    #   源码改了之后的合法路径是**升版本号**：_get_pandaone_version() 现在
+    #   会读源码树的 pyproject.toml，版本一变就自动刷新指纹（上面已处理）。
     if not silent:
         print(t("err_fingerprint_mismatch"))
         print(f"  {t('_stored', stored=stored_hash[:16])}")

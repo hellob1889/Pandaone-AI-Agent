@@ -502,7 +502,8 @@ def cmd_write(args):
                 # 让审计日志跟本次 commit 一起进 git 历史、可回溯。
                 r_add = subprocess.run(
                     [GIT, "add", "-f", target_rel_str, audit_rel_str],
-                    cwd=str(root), capture_output=True, text=True, timeout=10,
+                    cwd=str(root), capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=10,
                 )
                 if r_add.returncode != 0:
                     print(t("write_warn_git_add", err=r_add.stderr.strip()))
@@ -520,6 +521,8 @@ def cmd_write(args):
                 cwd=str(root),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             if r.returncode != 0:
@@ -532,6 +535,8 @@ def cmd_write(args):
                     cwd=str(root),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=5,
                 )
                 commit_hash = log_r.stdout.strip()

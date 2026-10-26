@@ -28,6 +28,7 @@
 param(
     [switch]$SkipInstall,
     [switch]$SkipDoctor,
+    [switch]$SkipMcp,
     [switch]$Force,
     [switch]$Help
 )
@@ -310,7 +311,21 @@ Write-Host "================================================================"
 Write-Host " Install done in $($duration.ToString('mm\:ss'))"
 Write-Host "================================================================"
 Write-Host ""
+# ---- 注册 MCP server（可用 -SkipMcp 跳过）----
+if (-not $SkipMcp) {
+    Write-Host "[MCP] 注册 MCP server 到 IDE 配置（Claude Desktop / Cursor / Trae）..." -ForegroundColor Cyan
+    python -m pandaone install-mcp --client auto
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  MCP 注册完成" -ForegroundColor Green
+    } else {
+        Write-Host "  MCP 注册失败，可手动执行: pandaone install-mcp" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[SKIP] MCP 注册 (per -SkipMcp)" -ForegroundColor DarkGray
+}
+
 Write-Host "Next steps:"
+Write-Host "  pandaone install-mcp         # register MCP server in IDE configs"
 Write-Host "  python -m pandaone --version         # verify CLI"
 Write-Host "  python scripts/doctor.py           # detailed diagnosis"
 Write-Host "  python -m pytest tests/ -q         # run all tests"
