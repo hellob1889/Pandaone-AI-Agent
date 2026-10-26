@@ -495,15 +495,21 @@ def _check_layer6_tamper_detection(root: _Path) -> dict:
     —— 而那才是 watchdog 抓到的真篡改（pandaone_guard/__main__.py 写的就是
     这个状态）。计数法照抄 cli_chunks/part_004.py cmd_status 的逐行 JSON 解析。
     """
-    candidates = [root / ".pandaone" / "pandaone.jsonl"]
-    pkg_root = _Path(__file__).resolve().parent.parent.parent
-    candidates.append(pkg_root / ".pandaone" / "pandaone.jsonl")
-    audit_log = next((c for c in candidates if c.exists()), candidates[0])
-    if not audit_log.exists():
-        # 有 config.json 却没有审计日志 = 审计基线被删
-        if (root / ".pandaone" / "config.json").exists():
-            return _layer(False, "audit log NOT found (audit baseline deleted)")
-        return _layer(True, "no audit log yet (clean state)")
+    root_log = root / ".pandaone" / "pandaone.jsonl"
+    root_cfg = root / ".pandaone" / "config.json"
+    if root_log.exists():
+        audit_log = root_log
+    elif root_cfg.exists():
+        # 项目已 init（config.json 在）却没有审计日志 = 审计基线被删
+        return _layer(False, "audit log NOT found (audit baseline deleted)")
+    else:
+        # v0.7.24: 打包成 .exe 之后项目目录里没有 .pandaone/，回落到包目录的日志，
+        #   只查包目录永远显示 "clean state"，会把真实信号掩盖掉。
+        pkg_root = _Path(__file__).resolve().parent.parent.parent
+        pkg_log = pkg_root / ".pandaone" / "pandaone.jsonl"
+        if not pkg_log.exists():
+            return _layer(True, "no audit log yet (clean state)")
+        audit_log = pkg_log
     records = []
     try:
         for line in audit_log.read_text(encoding="utf-8").splitlines():
