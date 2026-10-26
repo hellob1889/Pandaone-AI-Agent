@@ -11,9 +11,67 @@ def cmd_serve(args):
     return run_blocking(root, port=port)
 
 
+def _load_install_hook_module():
+    """加载 install_hook 模块，冻结形态下必须从磁盘按路径加载。
+
+    为什么不能用 `from pandaone.install_hook import ...`:
+      冻结包的模块表（PYZ）里**没有** pandaone.install_hook —— 它只作为
+      "数据文件"被整棵树拷进 _internal/pandaone/（见 build_pyinstaller.py 的
+      package_data_args()），静态 import 会直接 ImportError。
+
+    为什么不能用 `sys.executable -m pandaone.install_hook`:
+      冻结形态下 sys.executable 就是 pandaone.exe 本身，没有 "-m 模块执行"
+      语义 —— argparse 会把 "pandaone.install_hook" 当成子命令名，于是报
+      "invalid choice: 'pandaone.install_hook'"。
+      （真机装 0.7.32.0 时实测到的真 bug；cmd_setup / cmd_upgrade /
+      pandaone_mcp 早就有 frozen 感知，只有这条漏了。）
+
+    所以：从 _internal/pandaone/install_hook.py 按文件路径加载。这样模块内的
+    ROOT = Path(__file__).parent / "templates" 才会指向**冻结包内**那份模板，
+    而不是源码树里的。
+    """
+    import importlib.util
+
+    # 冻结形态：install_hook.py 在 exe 同级的 _internal/pandaone/ 下
+    candidates = []
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+        candidates.append(base / "_internal" / "pandaone" / "install_hook.py")
+    # 源码形态：模块在包里，直接 import 即可
+    candidates.append(Path(__file__).resolve().parent.parent / "install_hook.py")
+
+    for path in candidates:
+        try:
+            if not path.is_file():
+                continue
+            spec = importlib.util.spec_from_file_location("pandaone.install_hook", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception:
+            continue
+    return None
+
+
 def cmd_install_hook(args):
     """安装/卸载 pre-commit hook。委托给 install_hook.py"""
     import subprocess
+    if getattr(sys, "frozen", False):
+        # 冻结形态：进程内直接调用（sys.executable -m 在 exe 形态下无模块执行语义）
+        module = _load_install_hook_module()
+        if module is None:
+            print(t("err_hook_module_missing"), file=sys.stderr)
+            return 1
+        root = Path(args.root).resolve()
+        try:
+            if getattr(args, "uninstall", False):
+                return module.uninstall_hook(root)
+            return module.install_hook(root)
+        except Exception as e:
+            print(t("err_hook_install", err=str(e)), file=sys.stderr)
+            return 1
     cmd = [sys.executable, "-m", "pandaone.install_hook", "--root", args.root]
     if getattr(args, "uninstall", False):
         cmd.append("--uninstall")

@@ -2,11 +2,11 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
-## [0.7.32.0] - 2026-10-26
+## [0.7.33.0] - 2026-10-26
 
-自 v0.7.21.3 之后的**第一个发布版本**。
+**自 v0.7.21.3 之后的第一个对外发布版本。**
 
-0.7.24.0 ~ 0.7.31.0 这一串版本号始终只在开发分支上流转，**从未发布到 PyPI / GitHub Release**；
+0.7.24.0 ~ 0.7.32.0 这一串版本号始终只在开发分支上流转，**从未发布到 PyPI / GitHub Release**；
 它们各自的真机回归结论与修复内容完整保留在下方各段里。本次把这一整批改动一次性发布出去。
 
 ### 本次发布包含什么
@@ -18,10 +18,51 @@ All notable changes to Pandaone AI Agent will be documented in this file.
 | 0.7.31.0 | `git_ops` 本地镜像回退产出嵌套布局，与 `git clone --mirror` 不一致 → 照文档恢复不出来 |
 | 0.7.31.0 | `pre-commit` 模板里写死作者本机 `D:\软件\Git\...` 路径 |
 | 0.7.32.0 | 上一条的修法（运行时反推安装根）被真机对照实验**证伪** → 改为安装时固化 git 路径 |
+| 0.7.33.0 | **真机安装回归新查出的 bug**：`install-hook` 在 exe 形态下完全不可用（详见下节） |
 
-### 为什么版本号是 0.7.32.0，而不是直接发 0.7.31.0
+### Fixed: `install-hook` 在 exe 形态下完全不可用（真机回归查出）
 
-**因为 0.7.31.0 已经在真机上装过了**（`%LOCALAPPDATA%\Pandaone\pandaone.exe` 报的就是 v0.7.31.0）。
+**症状**（本机静默安装 0.7.32.0 后实测）：
+
+```
+> pandaone.exe install-hook --root D:\repo
+pandaone: error: argument command: invalid choice: 'pandaone.install_hook'
+```
+
+**根因**：`cli_chunks/part_005.py::cmd_install_hook` 原本用子进程调用 `install_hook.py`：
+
+```python
+cmd = [sys.executable, "-m", "pandaone.install_hook", "--root", args.root]
+```
+
+源码 / pip 形态下 `sys.executable` 是 python.exe，`-m` 有模块执行语义，没问题；
+但 **PyInstaller 冻结后 `sys.executable` 就是 `pandaone.exe` 本身** —— exe 没有 `-m` 语义，
+argparse 于是把 `pandaone.install_hook` 当成子命令名，以 "invalid choice" 失败。
+
+**影响面**：CLI 的 `install-hook` 子命令 + MCP 的 `pandaone_install_hook` 工具**两条链路全废**
+→ exe 用户在 L3 pre-commit 防御上根本装不上 hook。
+
+**为什么 `doctor` 一直显示 L3 OK**：L3 检查只验证"hook 文件在不在"，**不验证"安装命令能不能跑"**。
+所以装不上 hook 的机器，doctor 依然报 `[OK] L3_pre_commit_hook` —— 这正是该 bug 能长期潜伏的直接原因。
+
+**修法**：冻结形态下改为**进程内直接调用** install_hook 模块的函数，不再起子进程。
+
+- 模块加载：不能用 `from pandaone.install_hook import ...` —— 冻结包的模块表（PYZ）里没有它
+  （它只作为数据文件被整棵树拷进 `_internal/pandaone/`），静态 import 会 ImportError；
+  改为按文件路径 `importlib` 加载 `_internal/pandaone/install_hook.py`，
+  这样模块内的 `ROOT = Path(__file__).parent / "templates"` 正好指向**冻结包内**那份模板。
+- 非冻结形态保持原有 subprocess 路径不变。
+
+**同类代码复核**：`cmd_setup.py` / `cmd_upgrade.py` / `pandaone_mcp\__main__.py` 早就有 frozen 感知
+（用 `sys.executable serve` 或同目录 `pandaone.exe`），**只有 install-hook 这一条漏了**，
+已一并核对确认无其他遗漏。
+
+**新增测试**：`tests/test_install_hook_frozen.py`（6 项）——
+静态校验 frozen 分支不再出现 `sys.executable -m` + 行为校验进程内调用路径 + 模板常量可解析。
+
+### 为什么版本号是 0.7.33.0
+
+**因为 0.7.32.0 已经在真机上装过了**（`%LOCALAPPDATA%\Pandaone`，`~/.pandaone_fp.txt` 记着 `version=0.7.32.0`）。
 
 L5 自指纹记录的是 `{version, hash, form}` 三元组，而 `check_fingerprint()` 只在两种情况下自动刷新：
 
@@ -31,10 +72,16 @@ L5 自指纹记录的是 `{version, hash, form}` 三元组，而 `check_fingerpr
 于是「同版本号重打包」会落进第三种情况：**版本号不变 + 形态不变 + hash 变了** = 判定为**真篡改**
 → 整个 CLI 锁死，连 `--version` 都打不开。
 
-仓库自带的 `build_pyinstaller.py` 已经把这条规则做成了构建门禁（`check_version_bump`）：
+仓库自带的 `build_pyinstaller.py::check_version_bump` 已经把这条规则做成了构建门禁：
 同版本号重打包会被直接拒绝，除非显式加 `--allow-same-version`（该选项的注释写明「仅本地验证用」）。
 
-所以发布必须抬版本号 —— 本次从 0.7.31.0 抬到 **0.7.32.0**。
+所以发布必须抬版本号 —— 本次从 0.7.32.0 抬到 **0.7.33.0**。
+
+## [0.7.32.0] - 2026-10-26
+
+> 未发布的中间版本。0.7.32.0 只在本机做过一次真机安装回归，
+> **回归反而查出 `install-hook` 的真 bug**（见上方 0.7.33.0 段落），
+> 因此对外发布版本直接定为 **0.7.33.0**，0.7.32.0 从未发布。
 
 ## [0.7.31.0] - 2026-10-25
 
