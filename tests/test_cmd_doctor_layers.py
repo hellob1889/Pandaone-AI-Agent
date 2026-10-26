@@ -140,6 +140,11 @@ class TestP0SummaryGate:
         assert report["overall_ok"] is True
 
     def test_failed_layer_is_listed_in_report(self, tmp_path, monkeypatch):
+        for name in ("_check_layer1_file_lock", "_check_layer2_watchdog",
+                     "_check_layer4_startup", "_check_layer5_self_fingerprint",
+                     "_check_layer6_tamper_detection", "_check_layer7_ci_audit",
+                     "_check_layer8_path_conflict"):
+            monkeypatch.setattr(_doc, name, lambda root=None: _doc._layer(True, "stub"))
         monkeypatch.setattr(_doc, "_check_layer3_pre_commit",
                             lambda root=None: _doc._layer(False, "stub failure"))
         report = _doc._collect_report(tmp_path)
@@ -317,8 +322,11 @@ class TestLayer6TamperDetection:
         _assert_real_failure(info)
         assert "audit log" in info["note"]
 
-    def test_l6_ok_on_first_run_without_config(self, tmp_path):
+    def test_l6_ok_on_first_run_without_config(self, tmp_path, monkeypatch):
+        """没 init 过（无 config.json）+ 无审计日志 → 首次运行，保持 OK。"""
         p = _project(tmp_path, config=False)
+        # 把包目录基准指到临时项目，避免命中源码仓的审计日志（结果依赖机器状态）
+        monkeypatch.setattr(_doc, "__file__", str(p / "pkg" / "x" / "cmd_doctor.py"))
         info = _doc._check_layer6_tamper_detection(p)
         assert info["ok"] is True
         assert "no audit log" in info["note"]
