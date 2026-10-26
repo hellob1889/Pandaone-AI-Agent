@@ -57,6 +57,22 @@ class TestAddDoctorParser:
         args = sub.choices["doctor"].parse_args(["--clean-conflicts"])
         assert args.clean_conflicts is True
 
+    def test_accepts_root_option(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command")
+        add_doctor_parser(sub)
+        args = sub.choices["doctor"].parse_args(["--root", "/tmp/demo"])
+        assert Path(args.root) == Path("/tmp/demo")
+
+    def test_root_defaults_to_cwd(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="command")
+        add_doctor_parser(sub)
+        args = sub.choices["doctor"].parse_args([])
+        assert Path(args.root) == Path.cwd()
+
     def test_clean_conflicts_defaults_false(self):
         import argparse
         parser = argparse.ArgumentParser()
@@ -82,11 +98,11 @@ class TestCollectReport:
         for k in ["installed", "version", "path"]:
             assert k in g
 
-    def test_layers_has_all_7(self):
+    def test_layers_has_all_8(self):
         layers = _collect_report()["layers"]
         for name in ["L1_file_lock", "L2_watchdog_rollback", "L3_pre_commit_hook",
                      "L4_startup_check", "L5_self_fingerprint", "L6_tamper_detection",
-                     "L7_ci_audit"]:
+                     "L7_ci_audit", "L8_path_conflict"]:
             assert name in layers
 
     def test_layer_format(self):
@@ -95,18 +111,28 @@ class TestCollectReport:
             assert "ok" in info and "note" in info
 
     def test_overall_ok_logic(self):
+        """v0.7.34.0: overall_ok = git ok AND python ok AND 所有适用层 ok。"""
         report = _collect_report()
-        expected = report["git"]["installed"] and report["python"]["ok"]
-        assert report["overall_ok"] == expected
+        applicable = {n: i for n, i in report["layers"].items() if not i.get("na")}
+        failed = [n for n, i in applicable.items() if not i["ok"]]
+        assert report["failed_layers"] == failed
+        if failed:
+            assert report["overall_ok"] is False
+        else:
+            expected = report["git"]["installed"] and report["python"]["ok"]
+            assert report["overall_ok"] == expected
 
 
-def _make_args(install_git=False, json_out=False, lang="en", clean_conflicts=False):
+def _make_args(install_git=False, json_out=False, lang="en", clean_conflicts=False,
+               root=None):
     args = mock.Mock()
     args.install_git = install_git
     args.json = json_out
     args.lang = lang
     # 必须显式设置：mock.Mock() 未显式设置的属性访问返回 truthy 的 Mock 对象
     args.clean_conflicts = clean_conflicts
+    # v0.7.34.0: doctor 支持 --root（项目级检查不再绑死 cwd）
+    args.root = str(root) if root is not None else str(Path.cwd())
     return args
 
 
@@ -163,6 +189,18 @@ class TestCmdDoctorJSON:
         report["overall_ok"] = False
         with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=report):
             assert cmd_doctor(_make_args(json_out=True)) == 2
+
+
+    def test_exit_code_three_when_layer_failed(self):
+        """v0.7.34.0 守门: 层失败必须体现在退出码上（之前一律 exit 0）。"""
+        report = _ok_report()
+        report["layers"] = {
+            "L3_pre_commit_hook": {"ok": False, "note": "hook NOT installed"},
+        }
+        report["failed_layers"] = ["L3_pre_commit_hook"]
+        report["overall_ok"] = False
+        with mock.patch.object(_cmd_doc_mod, "_collect_report", return_value=report):
+            assert cmd_doctor(_make_args(json_out=True)) == 3
 
 
 class TestCmdDoctorInstallGit:
