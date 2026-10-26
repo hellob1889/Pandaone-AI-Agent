@@ -91,7 +91,7 @@ class TestSSEDisconnectCleanup:
 
     @pytest.fixture
     def running_server(self, tmp_path):
-        """启动 pandaone serve,返回 (proc, port, audit_path)。"""
+        """启动 pandaone serve,返回 (port, audit_path)。"""
         from pandaone.pandaone_serve import start_server
         (tmp_path / ".pandaone").mkdir()
         (tmp_path / ".pandaone" / "config.json").write_text("{}")
@@ -99,7 +99,9 @@ class TestSSEDisconnectCleanup:
         port = _find_free_port(20300)
         server, monitor = start_server(tmp_path, port=port, open_browser=False)
         try:
-            yield port, tmp_path / ".pandaone" / "pandaone.jsonl"
+            # 用 server 真正绑到的端口:请求的端口被占时 start_server 会自动顺延,
+            # 拿请求端口去连会连到别人的服务或直接被 RST(并发跑全量时的偶发红)
+            yield server.server_address[1], tmp_path / ".pandaone" / "pandaone.jsonl"
         finally:
             monitor.stop()
             server.shutdown()

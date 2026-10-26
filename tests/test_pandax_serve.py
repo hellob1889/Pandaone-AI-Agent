@@ -22,6 +22,23 @@ from pandaone.pandaone_serve import (
 )
 
 
+def _free_port() -> int:
+    """向 OS 借一个空闲端口当基准端口(绑 0 号端口由系统分配)。
+
+    为什么不能写死端口号(19000 / 19100 / 19200 ...):
+      1) start_server() 遇到端口被占会**自动顺延到下一个可用端口**,实际端口只
+         打印在 stdout 上,调用方拿不到"我请求的就是这个端口"的契约;
+      2) 同机并发跑全量(另一个 pytest 进程 / 常驻服务,如 workswarm.exe 常驻
+         占用 19000/19001)时,写死的端口随时会被占 -> 测试连到别人的服务或者
+         直接被 RST(WinError 10054)。
+         这正是 tests/test_pandax_serve.py 在 Windows 全量并发下偶发 4 红根因。
+    所以基准端口动态借,URL 一律用 server.server_address[1](server 真正绑到的端口)。
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 # ============================================================
 # AuditEventBus 单元测试
 # ============================================================
@@ -76,18 +93,80 @@ class TestAuditEventBus:
 
 class TestFindFreePort:
     def test_returns_int(self):
-        port = _find_free_port(19000, max_tries=5)
+        base = _free_port()
+        port = _find_free_port(base, max_tries=5)
         assert isinstance(port, int)
-        assert 19000 <= port < 19005
+        assert base <= port < base + 5
 
     def test_finds_unused_port(self):
         # 占用一个端口,验证 _find_free_port 跳过它
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 19100))
+            # 端口向 OS 借:写死 19100 会和并发跑的另一个实例撞车 ->
+            # 直接 OSError 10048(Address already in use),用例就红了
+            s.bind(("127.0.0.1", 0))
             s.listen(1)
-            port = _find_free_port(19100, max_tries=10)
-            assert port != 19100
-            assert port >= 19101
+            occupied = s.getsockname()[1]
+            port = _find_free_port(occupied, max_tries=10)
+            assert port != occupied
+            assert port > occupied
+
+
+# ============================================================
+# 端口隔离回归测试(Windows 端口抢占)
+# ============================================================
+
+class TestPortIsolation:
+    """两个 server 绝不能"共享"同一个端口。
+
+    回归 bug: socketserver 的 TCPServer.allow_reuse_address 默认 = 1 ->
+    server_bind() 设 SO_REUSEADDR。Windows 上 SO_REUSEADDR 允许第二个 socket
+    抢占第一个已经 LISTEN 的端口(Linux 上同样的 bind 直接 EADDRINUSE 失败),
+    于是同机并发跑两份时两个进程会"同时拥有"同一端口 ->
+    请求被随机分给其中一个,另一个被 RST(WinError 10054),
+    表现为本文件在 Windows 全量并发下偶发 4 个用例红。
+    """
+
+    @staticmethod
+    def _make_root(base: Path, name: str) -> Path:
+        root = base / name
+        (root / ".pandaone").mkdir(parents=True)
+        (root / ".pandaone" / "config.json").write_text("{}")
+        (root / ".pandaone" / "pandaone.jsonl").touch()
+        return root
+
+    def test_server_binds_requested_port_when_free(self, tmp_path):
+        """端口空闲时,server 必须真的绑在请求的端口上(不能偷偷换端口)。"""
+        from pandaone.pandaone_serve import start_server
+        base = _free_port()
+        server, monitor = start_server(self._make_root(tmp_path, "a"),
+                                       port=base, open_browser=False)
+        try:
+            assert server.server_address[1] == base
+        finally:
+            monitor.stop()
+            server.shutdown()
+            server.server_close()
+
+    def test_two_servers_never_share_one_port(self, tmp_path):
+        """同进程起两个 server 请求同一端口:必须各占各的,不能共享。"""
+        from pandaone.pandaone_serve import start_server
+        base = _free_port()
+        servers = []
+        try:
+            for name in ("a", "b"):
+                servers.append(start_server(self._make_root(tmp_path, name),
+                                            port=base, open_browser=False))
+            p1 = servers[0][0].server_address[1]
+            p2 = servers[1][0].server_address[1]
+            assert p1 != p2, (
+                f"两个 server 抢到了同一个端口 {p1}"
+                f"(Windows SO_REUSEADDR 抢端口) -> 请求会被随机分发/被 RST"
+            )
+        finally:
+            for server, monitor in servers:
+                monitor.stop()
+                server.shutdown()
+                server.server_close()
 
 
 # ============================================================
@@ -191,9 +270,10 @@ class TestServeHTTP:
         (tmp_path / ".pandaone" / "config.json").write_text("{}")
         (tmp_path / ".pandaone" / "pandaone.jsonl").touch()
 
-        server, monitor = start_server(tmp_path, port=19200, open_browser=False)
+        server, monitor = start_server(tmp_path, port=_free_port(), open_browser=False)
+        actual_port = server.server_address[1]
         try:
-            with urllib.request.urlopen("http://127.0.0.1:19200/", timeout=5) as r:
+            with urllib.request.urlopen(f"http://127.0.0.1:{actual_port}/", timeout=5) as r:
                 html = r.read().decode("utf-8")
                 assert r.status == 200
                 assert "Pandaone AI Agent" in html
@@ -210,9 +290,10 @@ class TestServeHTTP:
         (tmp_path / ".pandaone" / "config.json").write_text("{}")
         (tmp_path / ".pandaone" / "pandaone.jsonl").touch()
 
-        server, monitor = start_server(tmp_path, port=19201, open_browser=False)
+        server, monitor = start_server(tmp_path, port=_free_port(), open_browser=False)
+        actual_port = server.server_address[1]
         try:
-            with urllib.request.urlopen("http://127.0.0.1:19201/api/ping", timeout=5) as r:
+            with urllib.request.urlopen(f"http://127.0.0.1:{actual_port}/api/ping", timeout=5) as r:
                 body = json.loads(r.read())
                 assert body["pong"] is True
         finally:
@@ -237,9 +318,10 @@ class TestServeHTTP:
             for r in records:
                 f.write(json.dumps(r) + "\n")
 
-        server, monitor = start_server(tmp_path, port=19202, open_browser=False)
+        server, monitor = start_server(tmp_path, port=_free_port(), open_browser=False)
+        actual_port = server.server_address[1]
         try:
-            with urllib.request.urlopen("http://127.0.0.1:19202/api/stats", timeout=5) as r:
+            with urllib.request.urlopen(f"http://127.0.0.1:{actual_port}/api/stats", timeout=5) as r:
                 body = json.loads(r.read())
                 assert body["total"] == 4
                 assert body["APPROVED"] == 2
@@ -265,7 +347,8 @@ class TestServeSSE:
         (tmp_path / ".pandaone" / "config.json").write_text("{}")
         (tmp_path / ".pandaone" / "pandaone.jsonl").touch()
 
-        server, monitor = start_server(tmp_path, port=19203, open_browser=False)
+        server, monitor = start_server(tmp_path, port=_free_port(), open_browser=False)
+        actual_port = server.server_address[1]
 
         events_received = []
         done = threading.Event()
@@ -273,7 +356,7 @@ class TestServeSSE:
         def listener():
             try:
                 req = urllib.request.Request(
-                    "http://127.0.0.1:19203/api/events",
+                    f"http://127.0.0.1:{actual_port}/api/events",
                     headers={"Accept": "text/event-stream"},
                 )
                 with urllib.request.urlopen(req, timeout=3) as r:
@@ -321,14 +404,15 @@ class TestServeSSE:
         audit = tmp_path / ".pandaone" / "pandaone.jsonl"
         audit.touch()
 
-        server, monitor = start_server(tmp_path, port=19204, open_browser=False)
+        server, monitor = start_server(tmp_path, port=_free_port(), open_browser=False)
+        actual_port = server.server_address[1]
         events_received = []
         done = threading.Event()
 
         def listener():
             try:
                 req = urllib.request.Request(
-                    "http://127.0.0.1:19204/api/events",
+                    f"http://127.0.0.1:{actual_port}/api/events",
                     headers={"Accept": "text/event-stream"},
                 )
                 with urllib.request.urlopen(req, timeout=5) as r:
