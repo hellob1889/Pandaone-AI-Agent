@@ -48,7 +48,11 @@ def _load_install_hook_module():
     #   冻结形态靠第一个候选（exe 同级）兜住了，所以这个 bug 一直没暴露；
     #   但 doctor 的 L3 真检要用它（安装命令在当前形态可加载），
     #   不修的话源码形态下 L3 会永远误报 FAIL。
-    candidates.append(Path(__file__).resolve().parent / "install_hook.py")
+    # 两个候选都保留: chunk 命名空间里 __file__ 是 part_005.py（parent.parent 对），
+    # cli 命名空间里 __file__ 是 cli.py（parent 对）—— 两个都要能找到。
+    _here = Path(__file__).resolve().parent
+    candidates.append(_here / "install_hook.py")
+    candidates.append(_here.parent / "install_hook.py")
 
     for path in candidates:
         try:
