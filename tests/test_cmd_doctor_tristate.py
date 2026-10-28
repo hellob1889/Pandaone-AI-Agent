@@ -37,6 +37,7 @@ test_cmd_doctor_tristate.py — `pandaone doctor` 三态语义 + M1~M5 回归测
 """
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -55,6 +56,10 @@ LAYER_NAMES = [
     "L4_startup_check", "L5_self_fingerprint", "L6_tamper_detection",
     "L7_ci_audit", "L8_path_conflict",
 ]
+
+#: 提示行的识别正则 —— 只认**行首**的 [INFO]/[WARN]/[ERROR] 标记。
+#: 用 [ \t]*（不是 \s*）避免跨行匹配：JSON 字段值里恰好带方括号不算污染。
+_NOTICE_LINE_RE = re.compile(r"(?m)^[ \t]*\[(INFO|WARN|ERROR)\]")
 
 
 # ============================================================
@@ -379,7 +384,22 @@ class TestDoctorJsonStdoutPurity:
         )
 
     def test_doctor_json_stdout_is_one_object_with_fresh_home(self, tmp_path):
-        """端到端: 全新 HOME（无指纹文件）+ --json -> stdout 整段可 json.loads。"""
+        """端到端: 全新 HOME（无指纹文件）+ --json -> stdout 整段可 json.loads。
+
+        v0.7.34.1 跨平台修复（CI Linux 红 / Windows 绿）:
+          隔离家目录必须**同时**设两个环境变量 ——
+            HOME        → Linux / macOS: posixpath.expanduser("~") 读它
+            USERPROFILE → Windows:      ntpath.expanduser("~") 优先读它
+          只设 USERPROFILE 时，Linux 上 Path.home() 仍指向真实 HOME，指纹文件
+          还在那儿（tests/conftest.py 的 session fixture 开跑前就把指纹**播种**
+          到真实 HOME 了）→ 走不到"首次运行"分支 → stderr 里没有 [INFO] 提示
+          → 老断言 assert "[INFO]" in r.stderr 在 Linux CI 上必红。
+
+          HOMEDRIVE / HOMEPATH **不用**设: ntpath.expanduser 的 Windows 分支是
+          "USERPROFILE 优先，缺失才回退 HOMEDRIVE+HOMEPATH" —— 本用例永远设了
+          USERPROFILE，那条回退分支根本走不到；设了反而会毁掉子进程里其它工具
+          （git / cmd）可能用到的回退信息。
+        """
         import os
         import subprocess
 
@@ -388,7 +408,9 @@ class TestDoctorJsonStdoutPurity:
         proj = tmp_path / "proj"
         proj.mkdir()
         env = dict(os.environ)
-        env["USERPROFILE"] = str(home)      # 隔离真实指纹文件 -> 走"首次运行"分支
+        # 隔离真实指纹文件 -> 走"首次运行"分支（两个平台各认各的变量）
+        env["HOME"] = str(home)          # Linux / macOS: Path.home() 读它
+        env["USERPROFILE"] = str(home)   # Windows: ntpath.expanduser("~") 优先项
         env["PYTHONPATH"] = str(ROOT / "src")
         env["PANDAONE_SKIP_GIT_CHECK"] = "1"
         r = subprocess.run(
@@ -403,9 +425,30 @@ class TestDoctorJsonStdoutPurity:
         assert isinstance(data, dict)
         assert "layers" in data
         assert "overall_ok" in data
-        # 提示没丢，只是换了流 —— 用户在终端里照样看得到
-        assert "[INFO]" in r.stderr, (
-            "指纹提示应走 stderr:\n" + r.stderr
+        # --- stdout 纯度：这才是"升级后首跑 doctor --json 可被机器解析"的守门 ---
+        # 提示行（[INFO]/[WARN]/[ERROR]）一旦混进 stdout，json.loads(stdout) 必炸
+        # ("Expecting value: line 1 column 2")。
+        assert not _NOTICE_LINE_RE.search(r.stdout), (
+            "stdout 混进了提示行（会破坏 json.loads(stdout)）:\n" + r.stdout[:400]
+        )
+        # --- 「提示若出现，必须在 stderr」---
+        # 不强制提示**必须**出现: 指纹文件已存在时（任何原因）就本来没有提示 ——
+        # 那是产品正确行为，不是缺陷。老断言把"提示必须存在"和"提示必须在
+        # stderr"绑死了，所以指纹已存在时会在 Linux CI 上假红。
+        # "提示确实走了 stderr" 由同文件的 in-process 用例守住:
+        # test_fingerprint_notice_goes_to_stderr_not_stdout（monkeypatch 了
+        # FP_PATH，不依赖 HOME，Linux CI 上同样是绿的）。
+        for line in r.stderr.splitlines():
+            if _NOTICE_LINE_RE.search(line):
+                assert line not in r.stdout, (
+                    "提示同时出现在 stdout 和 stderr —— 说明污染了 stdout:\n" + line
+                )
+        # --- 隔离确实生效（平台无关的证据）---
+        # 指纹文件被写进**隔离出来的**家目录 ⇒ 子进程确实把 HOME / USERPROFILE
+        # 当成了家目录 ⇒ 走的是"首次运行自动生成指纹"分支（而不是"指纹已存在"
+        # 分支）。这条不依赖 stderr 文案，两个平台都成立。
+        assert (home / ".pandaone_fp.txt").exists(), (
+            "子进程没在隔离家目录里生成指纹文件（隔离没生效？）:\n%s" % home
         )
 
     def test_doctor_json_stdout_is_one_object_in_tty(self, tmp_path, monkeypatch, capsys):
