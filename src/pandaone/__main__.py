@@ -196,23 +196,33 @@ def _git_gate():
     if _git_is_installed():
         return
 
+    # v0.7.34.0: 机器可读模式（--json）下 stdout 只能是那**一个** JSON 文档。
+    #   "git 缺失"提示属于诊断信息 —— 机器可读模式下改走 stderr；
+    #   普通模式下行为不变（仍走 stdout，终端里照样看得见）。
+    try:
+        from pandaone.cli import is_machine_readable_mode as _is_machine_mode
+        _machine = _is_machine_mode()
+    except Exception:
+        _machine = False
+    _ui = sys.stderr if _machine else sys.stdout
+
     try:
         if sys.stdout.isatty():
-            print(_t("_gate_git_missing_attempt_install"))
+            print(_t("_gate_git_missing_attempt_install"), file=_ui)
         result = _git_install()
         if sys.stdout.isatty():
-            print(_t("_gate_git_installed", ver=result.version, channel=result.channel))
-            print(_t("_gate_git_installed_path", path=result.path))
-            print(_t("_gate_git_restart_shell"))
+            print(_t("_gate_git_installed", ver=result.version, channel=result.channel), file=_ui)
+            print(_t("_gate_git_installed_path", path=result.path), file=_ui)
+            print(_t("_gate_git_restart_shell"), file=_ui)
     except GitInstallError as e:
         if sys.stdout.isatty():
-            print(_t("_gate_git_install_failed", err=str(e)))
+            print(_t("_gate_git_install_failed", err=str(e)), file=_ui)
             from pandaone.git_installer import get_install_hint
-            print(_t("_doctor_manual_hint"))
-            print(get_install_hint())
+            print(_t("_doctor_manual_hint"), file=_ui)
+            print(get_install_hint(), file=_ui)
     except Exception as e:
         if sys.stdout.isatty():
-            print(_t("_gate_git_install_unexpected", err_type=type(e).__name__, err=str(e)))
+            print(_t("_gate_git_install_unexpected", err_type=type(e).__name__, err=str(e)), file=_ui)
 
 
 # 模块 import 时立即注册
