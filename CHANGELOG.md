@@ -2,7 +2,7 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
-## [0.7.34.0] - 2026-10-28
+## [0.7.34.1] - 2026-10-29
 
 **把 `doctor` 从「存在性体检」改造成「可执行性体检」，并修掉 Windows 上两个真实用户会踩的坑。**
 
@@ -14,10 +14,10 @@ All notable changes to Pandaone AI Agent will be documented in this file.
 
 | 来源版本 | 主题 |
 |---|---|
-| 0.7.34.0 | **doctor 8 层全部改成真检查**：从"存在性代理"变成"该防护实际能不能工作"，并首次让层级失败真正反映到退出码 |
-| 0.7.34.0 | **修静默安装不更新 IDE 的 MCP 配置**：用户升级后 IDE 里仍跑旧版 MCP，v0.7.31.0 修的编码 bug 完全不生效 |
-| 0.7.34.0 | **修 Windows 上 `SO_REUSEADDR` 允许抢占他人监听端口**：同机并发跑两个 `pandaone serve` 会共享端口、请求被随机分发 |
-| 0.7.34.0 | `_load_install_hook_module` 源码形态路径修正（原实现恒返回 None） |
+| 0.7.34.1 | **doctor 8 层全部改成真检查**：从"存在性代理"变成"该防护实际能不能工作"，并首次让层级失败真正反映到退出码 |
+| 0.7.34.1 | **修静默安装不更新 IDE 的 MCP 配置**：用户升级后 IDE 里仍跑旧版 MCP，v0.7.31.0 修的编码 bug 完全不生效 |
+| 0.7.34.1 | **修 Windows 上 `SO_REUSEADDR` 允许抢占他人监听端口**：同机并发跑两个 `pandaone serve` 会共享端口、请求被随机分发 |
+| 0.7.34.1 | `_load_install_hook_module` 源码形态路径修正（原实现恒返回 None） |
 
 ### Fixed: `doctor` 的 8 层里有 5 层是「存在性判定」
 
@@ -112,14 +112,14 @@ URL 也不取 `server.server_address[1]`，于是 `start_server` 顺延后测试
 ### 升级指引
 
 - **从 0.7.21.3 或更早版本升级**：直接 `pip install --upgrade pandaone-guard` 即可。
-  已实测 0.7.21.3(exe) → 0.7.34.0(exe) 与 0.7.21.3(pip) → 0.7.34.0(exe) **两条路径都不会触发指纹自锁**
+  已实测 0.7.21.3(exe) → 0.7.34.1(exe) 与 0.7.21.3(pip) → 0.7.34.1(exe) **两条路径都不会触发指纹自锁**
   （版本号变化走 auto-refresh 分支，该分支排在形态判断之前；0.7.21.3 的 JSON 指纹缺 `form` 字段也有兜底）。
 - **升级后建议手动跑一次** `pandaone install-mcp --client auto --absolute-command`，
   确保 IDE 里的 MCP 指向新版本绝对路径。
-- **若 doctor 报某一层 FAIL**：先看该层 note 说明的原因。v0.7.34.0 起 doctor 区分「未启用（N/A）」与
+- **若 doctor 报某一层 FAIL**：先看该层 note 说明的原因。v0.7.34.1 起 doctor 区分「未启用（N/A）」与
   「已启用但坏了（FAIL）」，只有后者才影响退出码。
 
-### 关于版本号从 0.7.21.3 跳到 0.7.34.0
+### 关于版本号从 0.7.21.3 跳到 0.7.34.1
 
 0.7.22 ~ 0.7.32 这批版本号**从未对外发布过**（一直在开发分支上流转）。
 其中 0.7.24 / 0.7.25 / 0.7.26 / 0.7.31 / 0.7.32 真正落地成版本号，0.7.22 / 0.7.23 只活在源码注释里，
