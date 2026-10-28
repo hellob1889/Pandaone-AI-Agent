@@ -376,6 +376,25 @@ COMMANDS = {
 }
 
 
+def is_machine_readable_mode(argv=None) -> bool:
+    """当前调用是否处于"机器可读输出"模式（`--json`）。
+
+    第一性原理:
+        机器端消费方（CI 脚本 / IDE 插件 / MCP）对 `pandaone doctor --json`
+        的做法是 **json.loads(整个 stdout)**。所以 stdout 上**只能**有那一个
+        JSON 文档 —— 提示行、装饰行、进度行都会让它直接抛 "Expecting value"。
+
+        人类可读模式（默认）**完全不受影响**：stdout 行为保持原样，
+        终端里的可见提示一点不少。
+
+        目前全仓库只有 `doctor --json` 一个机器可读入口（唯一带 --json 的
+        子命令），所以按 argv 里是否出现 `--json` 判断即可；
+        将来新增带 --json 的子命令自动生效。
+    """
+    args = list(argv) if argv is not None else sys.argv[1:]
+    return "--json" in args
+
+
 def main(argv=None):
     argv_list = argv if argv is not None else sys.argv[1:]
     import re as _re
@@ -450,18 +469,26 @@ def main(argv=None):
     #   - 脚本/CI 管道 grep 不到关键输出
     #   - 测试断言被噪音干扰
     #   `--silent` 仍然保留为显式关闭开关 (右键菜单继续使用)。
+    #
+    # v0.7.34.0: 机器可读模式（--json）下 stdout 只能是那**一个** JSON 文档。
+    #   banner + README 摘要合计 100+ 行装饰，实测在 TTY 下会把 doctor --json
+    #   的 stdout 撑到 116 行 -> json.loads 必炸（比指纹 INFO 更严重）。
+    #   这里让它们改走 stderr：终端里照样看得见（用户可见提示不丢），
+    #   但 stdout 不再被污染。非 --json 模式行为**完全不变**。
+    _machine = is_machine_readable_mode(argv_list)
     _is_tty = False
     try:
         _is_tty = sys.stdout.isatty()
     except Exception:
         _is_tty = False
     if not getattr(args, "silent", False) and _is_tty:
+        _ui = sys.stderr if _machine else sys.stdout
         banner = load_banner()
         for line in banner:
-            print(line)
+            print(line, file=_ui)
         summary = load_readme_summary()
         for line in summary:
-            print(line)
+            print(line, file=_ui)
     if getattr(args, "version", False):
         from pandaone import __version__
         print(f"pandaone v{__version__}")

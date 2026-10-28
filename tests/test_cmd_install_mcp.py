@@ -287,5 +287,78 @@ def test_auto_registers_installed_ide_without_existing_config(tmp_path, monkeypa
     assert "pandaone" in data["mcpServers"]
 
 
+# ---------------------------------------------------------------------------
+# v0.7.34.0 (R1) 回归：老版本写进 IDE 配置的**裸名**必须被纠正成绝对路径
+#
+# 背景：0.7.21.3 时代写进 IDE 配置的 command 是裸名 `pandaone-mcp`（走
+#       shutil.which 分支）。0.7.25.0 引入 --absolute-command 写绝对路径，
+#       但只有 install-mcp **真的执行**时才会生效。安装器静默安装时
+#       跳过了 install-mcp -> 裸名一直留着 -> IDE 按 PATH 命中旧 pip 版
+#       MCP -> 0.7.31.0 修的 GBK/UTF-8 编码 bug 对用户继续生效。
+#
+# 这里锁死 install_into 的语义：**总是**改写 command（不是"仅新建时写"），
+# 否则老用户的配置永远得不到纠正。
+# ---------------------------------------------------------------------------
+
+def test_absolute_command_rewrites_legacy_bare_name(tmp_path, monkeypatch):
+    """配置已存在且 command 是裸名时，--absolute-command 必须把它改成绝对路径。"""
+    appdir = tmp_path / "Pandaone"
+    appdir.mkdir()
+    (appdir / "pandaone-mcp.exe").write_bytes(b"MZ")
+    # 打包形态：同目录的绝对路径优先于 PATH 里的旧 pip 版
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(appdir), raising=False)
+    monkeypatch.setattr(sys, "executable", str(appdir / "pandaone.exe"))
+    monkeypatch.setattr(mcp.shutil, "which", lambda n: r"C:\old\Scripts\pandaone-mcp.exe")
+
+    target = tmp_path / "cursor" / "mcp.json"
+    target.parent.mkdir(parents=True)
+    # 0.7.21.3 时代写进去的老配置：command 是裸名
+    target.write_text(
+        json.dumps({"mcpServers": {"pandaone": {"command": "pandaone-mcp", "env": {}}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mcp, "candidate_configs", lambda: {"cursor": target})
+    args = SimpleNamespace(client="cursor", dry_run=False, no_backup=False, absolute_command=True)
+    rc = mcp.handler(args)
+    assert rc == 0
+
+    entry = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["pandaone"]
+    expected = str((appdir / "pandaone-mcp.exe").resolve())
+    assert entry["command"] == expected, (
+        f"老配置里的裸名必须被改写成绝对路径，实际: {entry['command']!r}"
+    )
+    assert Path(entry["command"]).is_absolute()
+
+
+def test_absolute_command_keeps_user_env_while_rewriting_command(tmp_path, monkeypatch):
+    """改写 command 的同时不能清掉用户自己配的 env（API key 等）。"""
+    appdir = tmp_path / "Pandaone"
+    appdir.mkdir()
+    (appdir / "pandaone-mcp.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(appdir), raising=False)
+    monkeypatch.setattr(sys, "executable", str(appdir / "pandaone.exe"))
+
+    target = tmp_path / "cursor" / "mcp.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        json.dumps({"mcpServers": {"pandaone": {
+            "command": "pandaone-mcp",
+            "env": {"PANDAONE_FP_PASSWORD": "secret"}}}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mcp, "candidate_configs", lambda: {"cursor": target})
+    args = SimpleNamespace(client="cursor", dry_run=False, no_backup=False, absolute_command=True)
+    rc = mcp.handler(args)
+    assert rc == 0
+
+    entry = json.loads(target.read_text(encoding="utf-8"))["mcpServers"]["pandaone"]
+    assert entry["command"] == str((appdir / "pandaone-mcp.exe").resolve())
+    assert entry["env"]["PANDAONE_FP_PASSWORD"] == "secret", "用户 env 不能被清空"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

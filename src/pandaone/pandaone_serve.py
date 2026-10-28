@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import errno
 import json
 import queue
 import socket
@@ -341,8 +342,80 @@ class _Handler(BaseHTTPRequestHandler):
 # 主入口
 # ============================================================
 
+class _PandaoneHTTPServer(ThreadingHTTPServer):
+    """仪表盘专用 HTTP server:端口占用是**原子**的,端口不会被别人抢走。
+
+    v0.7.33.1 fix (Windows 端口抢占 / 端口被两个进程共享):
+      socketserver 的 TCPServer.allow_reuse_address 默认 = 1 -> server_bind()
+      会设 SO_REUSEADDR。而 **Windows** 上 SO_REUSEADDR 的语义和 Linux 不同:
+      它允许另一个 socket **抢占本进程(或别的进程)已经 LISTEN 的端口**
+      (Linux 上同样的 bind 直接 EADDRINUSE 失败,必须 SO_REUSEPORT 才行)。
+      实测(Windows + Python 3.11,端口已被别的 socket 监听时):
+        - 不带 SO_REUSEADDR 的 bind -> 失败 errno=10048  (正确识别"被占")
+        - 带   SO_REUSEADDR 的 bind -> **成功**             (端口被抢走)
+      后果: 同机并发跑两份 pandaone serve(例如并发跑两遍全量测试)时,
+            两个进程会"同时拥有"同一端口 -> 请求被随机分给其中一个,
+            另一个直接被 RST(WinError 10054) ->
+            tests/test_pandax_serve.py 在 Windows 全量并发下偶发 4 个用例红。
+      对策: Windows 上关掉 allow_reuse_address —— 端口被别人占着就明确失败,
+            自动顺延到下一个端口(不抢);Linux/macOS 保留 True,那里 SO_REUSEADDR
+            只放宽 TIME_WAIT 复用、不会抢别人正在监听的端口,保留它还能保证
+            "刚退出就重启"不报 Address already in use。
+            (实测: Windows 上不带 SO_REUSEADDR 的 bind **不会**被 TIME_WAIT 阻塞,
+             所以关掉它不影响快速重启。)
+    """
+
+    # Windows: 不设 SO_REUSEADDR,防止抢占别人已监听的端口
+    allow_reuse_address = (sys.platform != "win32")
+
+    # 端口被占时向后顺延的最大尝试次数
+    port_scan_limit = 20
+
+    def server_bind(self):
+        """原子地占用端口: bind 成功才算占到,失败就顺延到下一个端口。
+
+        为什么不再用「先 _find_free_port() 探测、再让 server 重新 bind」:
+          探测(bind 完立刻 close)和真正 bind 之间存在 TOCTOU 窗口;
+          两个进程并发时会各自探测到同一个"空闲"端口, 然后双双 bind 成功 ->
+          同一端口被两个进程共享 -> 请求被随机服务/被 RST。
+        这里由 server_bind 自己真正 bind, 成功即占住, 窗口为零。
+        """
+        if self.allow_reuse_address:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        host, port = self.server_address[:2]
+        # v0.7.34.0 S4: 记住最后一次 bind 失败的真实 errno ——
+        #   原来**所有** bind 错误都被吞成 "No free port found"，
+        #   IPv6 上尤其误导（真实原因通常是 EADDRINUSE / EACCES，
+        #   而不是"这 20 个端口都没空闲"）。把 errno 带进异常信息。
+        last_err = None
+        for offset in range(self.port_scan_limit):
+            candidate = port + offset
+            try:
+                self.socket.bind((host, candidate))
+            except OSError as e:
+                last_err = e
+                continue
+            self.server_address = self.socket.getsockname()
+            self.server_name = socket.getfqdn(host)
+            self.server_port = candidate
+            return
+        detail = ""
+        if last_err is not None:
+            code = getattr(last_err, "errno", None)
+            name = errno.errorcode.get(code, "") if code is not None else ""
+            detail = " (last bind error: errno=%s %s %s)" % (
+                code, name, (last_err.strerror or "").strip())
+        raise RuntimeError(
+            f"No free port found in [{port}, {port + self.port_scan_limit}){detail}"
+        )
+
+
 def _find_free_port(start: int = 8765, max_tries: int = 20) -> int:
-    """从 start 开始找可用端口。"""
+    """从 start 开始找可用端口。
+
+    注意: 这只是"查一下"(探测完就释放),不保证返回的端口在调用方真正 bind 时
+    还在空闲 —— 真正占端口请用 _PandaoneHTTPServer.server_bind(原子占用)。
+    """
     for offset in range(max_tries):
         port = start + offset
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -360,7 +433,9 @@ def start_server(root: Path, port: int = 8765, host: str = "127.0.0.1",
 
     Args:
         root: pandaone 项目根目录
-        port: HTTP 端口(默认 8765)
+        port: 期望的 HTTP 端口(默认 8765)。**若该端口已被占用,会自动顺延到
+              下一个可用端口**(端口冲突自动探测),所以实际端口以返回对象的
+              server.server_address[1] 为准,不要假设等于传入的 port。
         host: 绑定地址(默认 127.0.0.1,只本机访问,防 LAN 扫描)
         open_browser: 是否自动打开浏览器
     """
@@ -380,9 +455,13 @@ def start_server(root: Path, port: int = 8765, host: str = "127.0.0.1",
         dev_path = Path(__file__).parent / INDEX_HTML_NAME
         _Handler.index_html = dev_path.read_bytes() if dev_path.exists() else b"<h1>index.html not found</h1>"
 
-    # 找可用端口
-    actual_port = _find_free_port(port)
-    server = ThreadingHTTPServer((host, actual_port), _Handler)
+    # 找可用端口并**原子占用**(server_bind 内部真正 bind: 占不到就顺延到下一个)
+    server = _PandaoneHTTPServer((host, port), _Handler)
+    actual_port = server.server_address[1]
+    # v0.7.34.0 S3: 端口被占用时原来**静默**顺延 —— 用户敲 `pandaone serve --port N`
+    #   却在别的端口上跑仪表盘，还以为没启动成功。这里明确告诉他顺延到了哪。
+    if actual_port != port:
+        print(_t("serve_port_shifted", requested=port, actual=actual_port))
 
     # 启动 watchdog
     has_watchdog = monitor.start()

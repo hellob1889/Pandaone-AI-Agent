@@ -37,8 +37,22 @@ def _load_install_hook_module():
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).resolve().parent
         candidates.append(base / "_internal" / "pandaone" / "install_hook.py")
-    # 源码形态：模块在包里，直接 import 即可
-    candidates.append(Path(__file__).resolve().parent.parent / "install_hook.py")
+    # 源码形态：模块在包里，按包目录定位（install_hook.py 与 cli.py 同级）
+    #
+    # v0.7.34.0 fix: 原来写的是 parent.parent —— 那是**假设** __file__ 仍是
+    #   cli_chunks/part_005.py 自己的路径。但 cli.py 加载完 chunk 后会把
+    #   __file__ 恢复成 cli.py 的路径（见 cli.py 里的 _orig_file 还原逻辑），
+    #   运行期取到的其实是 <repo>/src/pandaone/cli.py，
+    #   parent.parent 解析成 <repo>/src → <repo>/src/install_hook.py 不存在
+    #   → **源码形态下这个函数永远返回 None**。
+    #   冻结形态靠第一个候选（exe 同级）兜住了，所以这个 bug 一直没暴露；
+    #   但 doctor 的 L3 真检要用它（安装命令在当前形态可加载），
+    #   不修的话源码形态下 L3 会永远误报 FAIL。
+    # 两个候选都保留: chunk 命名空间里 __file__ 是 part_005.py（parent.parent 对），
+    # cli 命名空间里 __file__ 是 cli.py（parent 对）—— 两个都要能找到。
+    _here = Path(__file__).resolve().parent
+    candidates.append(_here / "install_hook.py")
+    candidates.append(_here.parent / "install_hook.py")
 
     for path in candidates:
         try:

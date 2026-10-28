@@ -33,6 +33,20 @@ DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 
+; v0.7.34.0: **必须**关掉"沿用上一次安装的任务勾选状态"（默认是 yes）。
+;   背景（本机真机实测）：Inno Setup 的 UsePreviousTasks 默认 yes —— 升级安装时
+;   会把上一次安装的任务勾选状态当成默认值。而旧版 .iss 里 installmcp 任务是
+;   `Flags: unchecked`（默认不勾选），这个"不勾选"会被写进卸载注册表
+;   （HKCU\...\Uninstall\{AppId}_is1 的 "Deselected Tasks: ...installmcp"），
+;   升级到 0.7.34.0 后**依然**不勾选 -> [Run] 里带 `Tasks: installmcp` 的
+;   install-mcp 条目又被跳过 -> R1（静默安装不更新 IDE 配置）老用户照样修不好。
+;   关掉之后：installmcp（已无 unchecked 标志）默认选中 -> 静默安装/交互升级都会执行。
+;   顺带修掉 addtopath 的同类问题：`checkedonce` 在 UsePreviousTasks=no 时失效，
+;   升级安装时 addtopath 保持勾选 -> PATH 前置修复在升级时也会跑（原来升级时被跳过）。
+;   注：desktopicon 显式带 unchecked，不勾选；它对应的图标文件本来就留在盘上，
+;       升级不受影响。
+UsePreviousTasks=no
+
 ; 输出设置
 OutputDir=Output
 OutputBaseFilename=Pandaone-Setup-{#MyAppVersion}
@@ -70,7 +84,10 @@ Name: "contextmenu"; Description: "Windows 右键菜单（级联）"; Types: ful
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add {#MyAppName} to system PATH"; GroupDescription: "System integration:"; Flags: checkedonce
-Name: "installmcp"; Description: "Register Pandaone MCP server into detected IDE configs (Claude Desktop / Cursor / Trae)"; GroupDescription: "Integrations:"; Flags: unchecked
+; v0.7.34.0: 去掉 `Flags: unchecked` —— 这一条是 install-mcp 能在**静默安装**里
+;   跑起来的前提（Inno Setup 6 实测，见 [Run] 段注释）。
+;   交互安装仍然可以在"选择附加任务"页取消勾选来退出（opt-out 保留）。
+Name: "installmcp"; Description: "Register Pandaone MCP server into detected IDE configs (Claude Desktop / Cursor / Trae)"; GroupDescription: "Integrations:"
 
 [Files]
 ; 主程序（来自 PyInstaller 打包）
@@ -165,18 +182,65 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 [Run]
 ; 安装后首次运行探测
 Filename: "{app}\{#MyAppExeName}"; Parameters: "install-git --probe-only"; Description: "Probe git availability"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser
+; v0.7.34.0: install-mcp 必须在**静默安装**时也执行（企业批量部署 /VERYSILENT 场景）。
+;   背景（真机实测 + Inno Setup 6 语义探针）：
+;     - 0.7.21.3 时代写进 IDE 配置的 MCP 启动命令是**裸名** `pandaone-mcp`；
+;     - 0.7.25.0 才引入 --absolute-command（写绝对路径）+ "打包形态优先同目录绝对路径"，
+;       但这些逻辑**必须 install-mcp 真跑**才会生效；
+;     - 旧写法给本条目挂了 skipifsilent -> 静默安装整条不执行 -> IDE 配置里的裸名原封不动
+;       -> IDE 启动 MCP 时按 PATH 命中旧 pip 版 -> 0.7.31.0 修的 GBK/UTF-8 编码 bug
+;       对静默升级用户**完全不生效**（tools/call 整条链路仍然 isError=true）。
+;   两处改动缺一不可（Inno Setup 6 实测，/VERYSILENT 下逐条验证）：
+;     1) 本条目去掉 skipifsilent —— 否则静默安装整条被跳过；
+;     2) [Tasks] 里的 installmcp 任务**不能**带 `Flags: unchecked` ——
+;        [Run] 条目带 `Tasks:` 时，只有该任务被选中才会执行（IS 文档：
+;        "If the end user selects a task from this list, the entry is processed"）；
+;        `unchecked` 任务在静默安装里默认不选中 -> 实测静默安装下本条目**根本不执行**，
+;        光去掉 skipifsilent 是修不好的。去掉 unchecked 后：静默安装必执行，
+;        交互安装仍可在"选择附加任务"页取消勾选（opt-out 不变）。
+;   顺序：本条目**必须**排在 `doctor --clean-conflicts` **之前** ——
+;     先把 IDE 配置改写成 {app}\pandaone-mcp.exe 绝对路径，再去清理 PATH 里的旧 pip 版，
+;     这样旧版被改名备份（*.bak-pandaone-<ver>）时，IDE 指的已经是新路径，不受影响。
+;     （Inno Setup 的 [Run] 条目按声明顺序执行；Tasks: 只决定"要不要执行"，不决定顺序。）
+Filename: "{app}\{#MyAppExeName}"; Parameters: "install-mcp --client auto --absolute-command"; Description: "Register Pandaone MCP server in detected IDE configs"; Flags: runmaximized nowait postinstall runascurrentuser; Tasks: installmcp
 ; v0.7.28.0: 清理 PATH 里抢占命令的旧版 pandaone。
 ;   背景（真机实测）：Windows PATH = 机器级 + 用户级（机器级在前），
 ;   pip 版 pandaone 在 Python\Scripts\（机器级）时，用户级前置**够不着**它，
 ;   装完 exe 版敲 pandaone 仍是旧版 —— 只能把旧的改名备份。
 ;   注意：**不能**加 skipifsilent —— 静默安装正是最需要清理的场景。
+;   v0.7.34.0: 排到 install-mcp 之后（见上）。
 Filename: "{app}\{#MyAppExeName}"; Parameters: "doctor --clean-conflicts"; Description: "Rename older pandaone binaries shadowing the command"; Flags: runmaximized nowait postinstall runascurrentuser
-Filename: "{app}\{#MyAppExeName}"; Parameters: "install-mcp --client auto --absolute-command"; Description: "Register Pandaone MCP server in detected IDE configs"; Flags: runmaximized nowait postinstall skipifsilent runascurrentuser; Tasks: installmcp
 
 [UninstallRun]
 ; 卸载时清理用户配置（仅 fingerprint）
-Filename: "{cmd}"; Parameters: "/C for /f ""delims="" %%i in ('dir /b /s /ah ""{userdocs}\Pandaone\.pandaone_fp.txt"" 2^>nul') do del /f /q ""%%i"""; Flags: runmaximized
-
+;
+; v0.7.34.0: 改成删**真实路径**上的指纹文件。
+;   指纹文件在 %USERPROFILE%\.pandaone_fp.txt
+;   （Python: fp_security.DEFAULT_FP_PATH = Path.home() / ".pandaone_fp.txt"；
+;     Windows 上 Path.home() = os.path.expanduser("~")，**优先取 USERPROFILE** 环境变量）
+;
+;   旧写法删的是 "Documents\Pandaone" 子目录下的指纹文件 —— 那个目录**从来不存在**，
+;   所以卸载后 ~\.pandaone_fp.txt 一直残留。后果:
+;     重装**同一构建** -> hash 相同 -> 没事；
+;     重装**同版本不同构建**（换构建机重打包）-> 版本同 + 形态同 + hash 变
+;     -> L5 判成真篡改 -> **CLI 全锁死**。
+;
+;   旧写法还有第二个更隐蔽的错: dir /b /s /ah 里的 /ah = **只列隐藏文件**，
+;   而指纹文件是 save_fp() 用 write_text 写的普通文件（属性 Archive，不是 Hidden），
+;   实测 /ah 一条都列不出来 —— 就算路径写对了也照样删不掉。
+;
+;   现在用精确删除，覆盖 ntpath.expanduser 的**全部**取值分支:
+;     1) %USERPROFILE%         —— 由 cmd.exe 展开，和 Python 的 Path.home() 读
+;        **同一个**环境变量，连"profile 被重定向到非标准路径"都能对上；
+;     2) %HOMEDRIVE%%HOMEPATH% —— ntpath.expanduser 的第二个分支
+;        （USERPROFILE 没设时用它），同样由 cmd.exe 展开。
+;   注: **不能**用 Inno 的 userprofile 常量 —— Inno Setup 6 根本没有这个常量，
+;   ISCC 会直接报 Unknown constant "userprofile" 把安装包编译搞挂
+;   （本机 Inno Setup 6.7.3 实测）。userappdata 也不行 —— 那是 AppData\Roaming。
+;   不用 dir /s 递归: 实测在真实 profile 上递归扫一遍要 21 秒（卸载明显卡住），
+;   而且 legacy dir 遇到 >MAX_PATH 会中断枚举，反而删不干净。
+Filename: "{cmd}"; Parameters: "/C del /f /q ""%USERPROFILE%\.pandaone_fp.txt"" 2>nul"; Flags: runmaximized
+Filename: "{cmd}"; Parameters: "/C del /f /q ""%HOMEDRIVE%%HOMEPATH%\.pandaone_fp.txt"" 2>nul"; Flags: runmaximized
 [UninstallDelete]
 ; 清理模板和日志
 Type: filesandordirs; Name: "{app}\templates"
