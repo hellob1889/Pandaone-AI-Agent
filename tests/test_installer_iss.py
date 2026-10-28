@@ -192,9 +192,9 @@ def test_uninstall_run_deletes_real_fingerprint_path():
         "[UninstallRun] 必须删 %USERPROFILE%\\.pandaone_fp.txt"
         "（= Python Path.home() 实际写指纹的位置）:\n" + "\n".join(entries)
     )
-    assert any("{userprofile}\\.pandaone_fp.txt" in e for e in entries), (
-        "[UninstallRun] 必须删 {userprofile}\\.pandaone_fp.txt"
-        "（覆盖 profile 被重定向 / USERPROFILE 环境变量陈旧的情况）:\n" + "\n".join(entries)
+    assert any("%HOMEDRIVE%%HOMEPATH%\\.pandaone_fp.txt" in e for e in entries), (
+        "[UninstallRun] 必须删 %HOMEDRIVE%%HOMEPATH%\\.pandaone_fp.txt"
+        "（ntpath.expanduser 的第二个分支: USERPROFILE 没设时用它）:\n" + "\n".join(entries)
     )
 
 
@@ -221,6 +221,21 @@ def test_uninstall_run_fingerprint_path_matches_python_home():
         assert "USERPROFILE" in body, (
             "[UninstallRun] 必须用 USERPROFILE 展开，才能和 Path.home() 对上"
         )
+
+
+def test_uninstall_run_does_not_use_unknown_inno_userprofile_constant():
+    """Inno Setup 6 **没有** userprofile 这个常量 —— 用了 ISCC 会直接编译失败。
+
+    本机 Inno Setup 6.7.3 实测: Unknown constant "userprofile"。
+    （userappdata 也不行 —— 那是 AppData\Roaming，不是 profile 目录。）
+    正确做法是让 cmd.exe 展开 %USERPROFILE%，因为 Python 的 Path.home()
+    读的就是同一个环境变量。
+    """
+    body = _uninstall_run_body()
+    assert "{userprofile}" not in body, (
+        "[UninstallRun] 不能用 {userprofile} —— Inno Setup 6 没有这个常量，"
+        "ISCC 会报 Unknown constant 把安装包编译搞挂"
+    )
 
 
 if __name__ == "__main__":
