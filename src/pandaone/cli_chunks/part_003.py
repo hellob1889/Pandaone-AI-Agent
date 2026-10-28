@@ -23,6 +23,15 @@ def _iter_protected_files(root: Path, config: dict) -> list[Path]:
     for p in root.rglob("*"):
         if not p.is_file():
             continue
+        # v0.7.34.0 M1: desktop.ini 是 Windows 的目录图标配置文件
+        #   （Explorer / 系统自己管理，不是用户代码），**永远不该**算受保护文件。
+        #   原因: pandaone lock 之后 apply_desktop_icon() 才写它（且必须可写），
+        #   算进去会让 doctor 的 L1 永远 FAIL —— 用户执行了开启 L1 的唯一官方
+        #   命令，doctor 反而报红且无解 → 信任崩塌。
+        #   这一层是"治本": 即使老项目的 config.json 没排除 desktop.ini，
+        #   它也不会进入受保护文件集合（init 默认值里也同时排除）。
+        if p.name.lower() == "desktop.ini":
+            continue
         if p in seen:
             continue
         if _effective_suffix(p) not in protected_exts:
