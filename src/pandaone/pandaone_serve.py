@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import errno
 import json
 import queue
 import socket
@@ -382,18 +383,30 @@ class _PandaoneHTTPServer(ThreadingHTTPServer):
         if self.allow_reuse_address:
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         host, port = self.server_address[:2]
+        # v0.7.34.0 S4: 记住最后一次 bind 失败的真实 errno ——
+        #   原来**所有** bind 错误都被吞成 "No free port found"，
+        #   IPv6 上尤其误导（真实原因通常是 EADDRINUSE / EACCES，
+        #   而不是"这 20 个端口都没空闲"）。把 errno 带进异常信息。
+        last_err = None
         for offset in range(self.port_scan_limit):
             candidate = port + offset
             try:
                 self.socket.bind((host, candidate))
-            except OSError:
+            except OSError as e:
+                last_err = e
                 continue
             self.server_address = self.socket.getsockname()
             self.server_name = socket.getfqdn(host)
             self.server_port = candidate
             return
+        detail = ""
+        if last_err is not None:
+            code = getattr(last_err, "errno", None)
+            name = errno.errorcode.get(code, "") if code is not None else ""
+            detail = " (last bind error: errno=%s %s %s)" % (
+                code, name, (last_err.strerror or "").strip())
         raise RuntimeError(
-            f"No free port found in [{port}, {port + self.port_scan_limit})"
+            f"No free port found in [{port}, {port + self.port_scan_limit}){detail}"
         )
 
 
@@ -445,6 +458,10 @@ def start_server(root: Path, port: int = 8765, host: str = "127.0.0.1",
     # 找可用端口并**原子占用**(server_bind 内部真正 bind: 占不到就顺延到下一个)
     server = _PandaoneHTTPServer((host, port), _Handler)
     actual_port = server.server_address[1]
+    # v0.7.34.0 S3: 端口被占用时原来**静默**顺延 —— 用户敲 `pandaone serve --port N`
+    #   却在别的端口上跑仪表盘，还以为没启动成功。这里明确告诉他顺延到了哪。
+    if actual_port != port:
+        print(_t("serve_port_shifted", requested=port, actual=actual_port))
 
     # 启动 watchdog
     has_watchdog = monitor.start()
