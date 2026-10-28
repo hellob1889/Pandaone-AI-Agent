@@ -173,7 +173,7 @@ def _uninstall_run_entries(body: str) -> list[str]:
 
 
 def test_uninstall_run_has_no_wrong_fingerprint_path():
-    """[UninstallRun] 段里不能再出现那个**不存在的** Documents\Pandaone 路径。"""
+    r"""[UninstallRun] 段里不能再出现那个**不存在的** Documents\Pandaone 路径。"""
     body = _uninstall_run_body()
     assert "{userdocs}" not in body, (
         "[UninstallRun] 不该再出现 {userdocs} —— 指纹不在 Documents 下"
@@ -184,7 +184,7 @@ def test_uninstall_run_has_no_wrong_fingerprint_path():
 
 
 def test_uninstall_run_deletes_real_fingerprint_path():
-    """必须删 %USERPROFILE%\.pandaone_fp.txt 和 {userprofile}\.pandaone_fp.txt。"""
+    r"""必须删 %USERPROFILE%\.pandaone_fp.txt 和 {userprofile}\.pandaone_fp.txt。"""
     body = _uninstall_run_body()
     entries = _uninstall_run_entries(body)
     assert entries, "[UninstallRun] 段里一条 Filename: 条目都没有"
