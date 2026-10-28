@@ -296,7 +296,12 @@ def cmd_init(args):
         "version": "1.0",
         "project_root": str(root),
         "protected_extensions": protected_extensions,
-        "exclude_patterns": ["__pycache__", "*.pyc", "_tmp_*.py", "_fix*.py", ".pandaone", ".git"],
+        # v0.7.34.0 M1: desktop.ini 是 Windows 的目录图标配置文件
+        #   （Explorer / 系统自己管理，不是用户代码），不该纳入代码保护范围。
+        #   之前它被 .ini 命中 → pandaone lock 之后 apply_desktop_icon()
+        #   才写出可写的 desktop.ini → doctor 的 L1 永远 FAIL（用户跑了唯一
+        #   的官方命令反而报红，且无解）。这里从默认排除项里去掉它。
+        "exclude_patterns": ["__pycache__", "*.pyc", "_tmp_*.py", "_fix*.py", ".pandaone", ".git", "desktop.ini"],
         "git_enabled": True,
         "watchdog_enabled": True,
         "min_reason_length": 5,
