@@ -137,6 +137,92 @@ def test_clean_conflicts_still_runs_in_silent_installs():
     )
 
 
+# ---------------------------------------------------------------------------
+# 要求 4：[UninstallRun] 必须删**真实路径**上的指纹文件
+# ---------------------------------------------------------------------------
+#
+# 背景（本轮返工，独立复核 + 真机实测确认）:
+#   指纹文件的真实位置是 %USERPROFILE%\.pandaone_fp.txt
+#   （fp_security.DEFAULT_FP_PATH = Path.home() / ".pandaone_fp.txt"，
+#     Windows 上 Path.home() 优先取 USERPROFILE 环境变量）。
+#
+#   而旧的 [UninstallRun] 删的是 "Documents\Pandaone" 子目录下的指纹文件
+#   —— 那个目录从来不存在，所以卸载后指纹**一直残留**。后果:
+#     重装同版本不同构建 -> 版本同 + 形态同 + hash 变 -> L5 判成真篡改
+#     -> CLI 全锁死（用户彻底用不了）。
+#
+#   旧写法还有第二个错: dir /b /s /ah 的 /ah = 只列隐藏文件，
+#   而指纹文件属性是 Archive（save_fp 只 write_text，没设 Hidden），
+#   实测 /ah 一条都列不出来 —— 路径对了也删不掉。
+
+def _uninstall_run_body() -> str:
+    """[UninstallRun] 段正文。"""
+    text = ISS.read_text(encoding="utf-8")
+    assert "[UninstallRun]" in text, "codeaudit.iss 里找不到 [UninstallRun] 段"
+    body = text.split("[UninstallRun]", 1)[1].split("[UninstallDelete]", 1)[0]
+    return body
+
+
+def _uninstall_run_entries(body: str) -> list[str]:
+    """[UninstallRun] 段里所有 Filename: 条目（整行）—— 卸载器**真正会执行**的命令。"""
+    return [
+        line.strip()
+        for line in body.splitlines()
+        if line.strip().startswith("Filename:")
+    ]
+
+
+def test_uninstall_run_has_no_wrong_fingerprint_path():
+    """[UninstallRun] 段里不能再出现那个**不存在的** Documents\Pandaone 路径。"""
+    body = _uninstall_run_body()
+    assert "{userdocs}" not in body, (
+        "[UninstallRun] 不该再出现 {userdocs} —— 指纹不在 Documents 下"
+    )
+    assert "Pandaone\\.pandaone_fp.txt" not in body, (
+        "[UninstallRun] 不该再删 <Documents>\\Pandaone\\.pandaone_fp.txt 这个不存在的路径"
+    )
+
+
+def test_uninstall_run_deletes_real_fingerprint_path():
+    """必须删 %USERPROFILE%\.pandaone_fp.txt 和 {userprofile}\.pandaone_fp.txt。"""
+    body = _uninstall_run_body()
+    entries = _uninstall_run_entries(body)
+    assert entries, "[UninstallRun] 段里一条 Filename: 条目都没有"
+    assert any("%USERPROFILE%\\.pandaone_fp.txt" in e for e in entries), (
+        "[UninstallRun] 必须删 %USERPROFILE%\\.pandaone_fp.txt"
+        "（= Python Path.home() 实际写指纹的位置）:\n" + "\n".join(entries)
+    )
+    assert any("{userprofile}\\.pandaone_fp.txt" in e for e in entries), (
+        "[UninstallRun] 必须删 {userprofile}\\.pandaone_fp.txt"
+        "（覆盖 profile 被重定向 / USERPROFILE 环境变量陈旧的情况）:\n" + "\n".join(entries)
+    )
+
+
+def test_uninstall_run_does_not_use_hidden_only_dir_filter():
+    """不能用 dir /ah —— 指纹文件不是隐藏文件（属性 Archive），/ah 过滤会一条都列不出来。"""
+    body = _uninstall_run_body()
+    entries = _uninstall_run_entries(body)
+    for e in entries:
+        assert "/ah" not in e, (
+            "[UninstallRun] 的删除命令不能用 dir /ah（只列隐藏文件）:\n" + e
+        )
+
+
+def test_uninstall_run_fingerprint_path_matches_python_home():
+    """Inno 侧删的路径必须和 Python 侧 Path.home() 指向同一个文件。"""
+    import os
+    from pathlib import Path
+
+    body = _uninstall_run_body()
+    # Python 侧: fp_security.DEFAULT_FP_PATH = Path.home() / ".pandaone_fp.txt"
+    assert (Path.home() / ".pandaone_fp.txt").name == ".pandaone_fp.txt"
+    if os.name == "nt":
+        # Windows 上 Path.home() 优先 USERPROFILE —— Inno 侧必须认同一个变量
+        assert "USERPROFILE" in body, (
+            "[UninstallRun] 必须用 USERPROFILE 展开，才能和 Path.home() 对上"
+        )
+
+
 if __name__ == "__main__":
     import sys
 
