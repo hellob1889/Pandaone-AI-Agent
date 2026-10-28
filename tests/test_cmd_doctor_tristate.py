@@ -339,5 +339,93 @@ class TestM5SingleJsonDocument:
         assert "steps" not in data, "没有步骤时不应凭空造 steps 字段"
 
 
+# ============================================================
+# v0.7.34.0 返工 — doctor --json 的 stdout 严格只有一个 JSON 文档
+# ============================================================
+#
+# 复现（用户侧实测，新 HOME + 无指纹文件）:
+#     [INFO] 已生成 pandaone 指纹: 62c1ffff50637824...   <- 打在 stdout
+#     { "pandaone": { ... } }
+#   json.loads(整个 stdout) -> Expecting value: line 1 column 2 (char 1)
+#
+# 为什么这是真问题:
+#   这行 INFO 只在"指纹不存在 / 需要刷新"时打印 —— 恰好就是**用户刚升级完**
+#   的第一个窗口。机器端（CI / IDE 插件 / MCP）升级后第一次跑就炸，第二次才正常。
+#
+# 覆盖的三条 stdout 污染路径:
+#   1) check_fingerprint 的 info 提示（公共启动路径）
+#   2) TTY 下的 banner + README 摘要（实测能把 stdout 撑到 116 行）
+#   3) git gate 的 "git 缺失" 提示
+
+
+class TestDoctorJsonStdoutPurity:
+    """`pandaone doctor --json` 的 stdout 必须能被 json.loads 整体解析成**单个**对象。"""
+
+    def test_fingerprint_notice_goes_to_stderr_not_stdout(self, tmp_path, monkeypatch, capsys):
+        """指纹提示必须走 stderr —— stdout 只留"命令的正题"。"""
+        from pandaone import cli as _cli
+
+        fp_path = tmp_path / ".pandaone_fp.txt"
+        monkeypatch.setattr(_cli, "FP_PATH", fp_path)
+        assert _cli.check_fingerprint() is True
+        captured = capsys.readouterr()
+        assert captured.out == "", (
+            "指纹提示不应出现在 stdout 上（会破坏 json.loads(stdout)）:\n"
+            + captured.out
+        )
+        assert "[INFO]" in captured.err, (
+            "指纹提示应该走 stderr（终端里照样看得见，用户可见提示不能丢）:\n"
+            + captured.err
+        )
+
+    def test_doctor_json_stdout_is_one_object_with_fresh_home(self, tmp_path):
+        """端到端: 全新 HOME（无指纹文件）+ --json -> stdout 整段可 json.loads。"""
+        import os
+        import subprocess
+
+        home = tmp_path / "home"
+        home.mkdir()
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        env = dict(os.environ)
+        env["USERPROFILE"] = str(home)      # 隔离真实指纹文件 -> 走"首次运行"分支
+        env["PYTHONPATH"] = str(ROOT / "src")
+        env["PANDAONE_SKIP_GIT_CHECK"] = "1"
+        r = subprocess.run(
+            [sys.executable, "-m", "pandaone", "doctor", "--json", "--root", str(proj)],
+            capture_output=True, text=True, encoding="utf-8",
+            env=env, timeout=180,
+        )
+        assert r.returncode in (0, 1, 3), (
+            "doctor 退出码应是 0/1/3，实际 %r:\n%s" % (r.returncode, r.stderr)
+        )
+        data = json.loads(r.stdout)        # 整段 stdout 只能是一个 JSON 文档
+        assert isinstance(data, dict)
+        assert "layers" in data
+        assert "overall_ok" in data
+        # 提示没丢，只是换了流 —— 用户在终端里照样看得到
+        assert "[INFO]" in r.stderr, (
+            "指纹提示应走 stderr:\n" + r.stderr
+        )
+
+    def test_doctor_json_stdout_is_one_object_in_tty(self, tmp_path, monkeypatch, capsys):
+        """TTY 下跑 doctor --json: banner 走 stderr, stdout 仍是纯 JSON。"""
+        import pandaone.__main__  # noqa: F401  (注册 doctor 子命令)
+        from pandaone import cli as _cli
+
+        monkeypatch.setattr(_cli, "FP_PATH", tmp_path / ".pandaone_fp.txt")
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+
+        rc = _cli.main(["doctor", "--json", "--root", str(tmp_path)])
+        assert rc in (0, 1, 3), rc
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)    # TTY 下也不能被 banner 污染
+        assert isinstance(data, dict)
+        assert "layers" in data
+        assert "pandaone" in captured.err or "█" in captured.err, (
+            "banner 应改走 stderr（终端里照样看得见）:\n" + captured.err[:400]
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
