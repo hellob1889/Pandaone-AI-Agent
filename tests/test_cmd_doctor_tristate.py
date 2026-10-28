@@ -101,6 +101,19 @@ def _na_machine_layers(monkeypatch):
             lambda *a, **k: _doc._na_layer("N/A - machine-level layer (test stub)"))
 
 
+def _write_writable_desktop_ini(root):
+    """在项目根写一个**可写**的 desktop.ini（复现 M1 的现场）。"""
+    ini = root / "desktop.ini"
+    if ini.exists():
+        try:
+            from pandaone.desktop_icon import remove_desktop_icon
+            remove_desktop_icon(root)
+        except Exception:
+            pass
+    ini.write_text("[.ShellClassInfo]\r\nIconFile=x\r\n", encoding="utf-8")
+    return ini
+
+
 def _state(info):
     """取层级三态；老实现没有 state 字段时按 ok/na 推导（便于对比断言）。"""
     if "state" in info:
@@ -142,9 +155,13 @@ class TestM1DesktopIni:
         (p / "demo.py").write_text("print('demo')\n", encoding="utf-8")
         try:
             assert _lock(p) == 0
-            # desktop.ini 是 lock 之后由 apply_desktop_icon 写的（必须可写）
-            (p / "desktop.ini").write_text(
-                "[.ShellClassInfo]\r\nIconFile=x\r\n", encoding="utf-8")
+            # desktop.ini 是 lock **之后**由 apply_desktop_icon 写的，
+            # 而且它必须保持可写（否则 Explorer 写不回去）。
+            # 它带 system/hidden 属性，直接覆盖写会 PermissionError ——
+            # 先用 remove_desktop_icon 清属性+删除，再写一个可写的副本，
+            # 复现 M1 的真实状态："lock 之后项目根有一个可写的 desktop.ini"。
+            _write_writable_desktop_ini(p)
+            assert (p / "desktop.ini").exists()
             info = _doc._check_layer1_file_lock(p)
             assert _state(info) != "fail", info["note"]
             assert info["ok"] is True, info["note"]
@@ -298,6 +315,7 @@ class TestM5SingleJsonDocument:
                             lambda: ("ok", "mocked: no conflict"))
         p = _init_project(tmp_path)
         _na_machine_layers(monkeypatch)
+        capsys.readouterr()          # 冲掉 init 的输出，只留 doctor 的 JSON
 
         _doc.cmd_doctor(_args(p, json_out=True, clean=True))
         out = capsys.readouterr().out
@@ -313,6 +331,7 @@ class TestM5SingleJsonDocument:
         """普通 --json（不带 --clean-conflicts）同样只能有一个 JSON 文档。"""
         p = _init_project(tmp_path)
         _na_machine_layers(monkeypatch)
+        capsys.readouterr()          # 冲掉 init 的输出，只留 doctor 的 JSON
         _doc.cmd_doctor(_args(p, json_out=True))
         out = capsys.readouterr().out
         data = json.loads(out)
