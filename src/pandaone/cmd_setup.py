@@ -429,9 +429,9 @@ def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
 
 
 def _step_doctor(root: Path) -> tuple[str, str]:
-    """跑一遍体检，输出 7 层防护状态。"""
+    """跑一遍体检，输出 8 层防护状态。"""
     try:
-        from pandaone.cmd_doctor import cmd_doctor
+        from pandaone.cmd_doctor import cmd_doctor, _collect_report
     except ImportError as e:
         return "skip", _t("setup_git_failed", err=str(e))
     args = SimpleNamespace(root=str(root))
@@ -439,7 +439,20 @@ def _step_doctor(root: Path) -> tuple[str, str]:
         rc = cmd_doctor(args)
     except Exception as e:
         return "warn", _t("setup_git_failed", err=str(e))
-    return ("ok" if rc == 0 else "warn"), _t("setup_doctor", rc=rc)
+    if rc == 0:
+        return "ok", _t("setup_doctor", rc=rc)
+    # v0.7.34.0 S6: exit 3 = 有防护层处于 fail 态（层坏了，不是安装失败）
+    #   → 仍然是 warn（层失败不等于安装失败），但 note 里必须说清是**哪几层**失败，
+    #   否则用户只看到 "exit=3" 一头雾水，不知道该去修哪一层。
+    failed = []
+    try:
+        report = _collect_report(root)
+        failed = list(report.get("failed_layers") or [])
+    except Exception:
+        failed = []
+    if failed:
+        return "warn", _t("setup_doctor_failed", layers=", ".join(failed), rc=rc)
+    return "warn", _t("setup_doctor", rc=rc)
 
 
 # ---------------------------------------------------------------------------

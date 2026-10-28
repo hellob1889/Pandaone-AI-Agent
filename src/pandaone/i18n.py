@@ -95,6 +95,7 @@ TRANSLATIONS = {
         "setup_serve": "仪表盘: {url}",
         "setup_serve_fail": "仪表盘启动失败: {err}",
         "setup_doctor": "体检完成 (exit={rc})",
+        "setup_doctor_failed": "体检完成 (exit={rc})，以下防护层未通过: {layers}",
         "setup_summary": "部署摘要:",
         "setup_done": "本地部署完成。所有环节均在本地完成，未设置任何远程仓库。",
         # ============ v0.7.26: PATH 持久化 ============
@@ -297,6 +298,7 @@ TRANSLATIONS = {
 
         # ============ serve (Web 仪表盘) ============
         "serve_ok_url": "[OK] Pandaone 仪表盘启动: {url}",
+        "serve_port_shifted": "[WARN] 端口 {requested} 已被占用，已顺延到 {actual}",
         "serve_info_root": "  项目根: {root}",
         "serve_info_watch": "  监视文件: {path}",
         "serve_info_watchdog": "  watchdog: {state}",
@@ -605,6 +607,7 @@ TRANSLATIONS = {
         "setup_serve": "Dashboard: {url}",
         "setup_serve_fail": "failed to start dashboard: {err}",
         "setup_doctor": "health check done (exit={rc})",
+        "setup_doctor_failed": "health check done (exit={rc}), failed layers: {layers}",
         "setup_summary": "Setup summary:",
         "setup_done": "Local setup complete. Everything ran locally; no remote repository was configured.",
         # ============ v0.7.26: PATH persistence ============
@@ -806,6 +809,7 @@ TRANSLATIONS = {
 
         # ============ serve (Web dashboard) ============
         "serve_ok_url": "[OK] Pandaone dashboard started: {url}",
+        "serve_port_shifted": "[WARN] port {requested} was busy, shifted to {actual}",
         "serve_info_root": "  Project root: {root}",
         "serve_info_watch": "  Watching file: {path}",
         "serve_info_watchdog": "  watchdog: {state}",
