@@ -56,10 +56,44 @@ v0.7.34.0: 从「存在性体检」升级为「真实可执行性体检」
   P5 L4 查对对象: 项目 README 摘要（load_readme_summary），不是 import watchdog
   P6 L5 不误报: 先比 form 再比 hash；无指纹文件 = FAIL（基线缺失）
 
+============================================================
+v0.7.34.0 R2: 三态语义（na / ok / fail）—— doctor 不再"永远红"
+============================================================
+起因（独立复核实测，不是推理）:
+  上一版把 doctor 改造成"可执行性体检"之后，**在真实用户机器上永远红**:
+    - 刚 `pandaone init` 的普通项目 → L1/L2/L3/L4 全 FAIL → exit 3
+    - `pandaone setup` 的步骤表**不跑 lock、不跑 install-hook**，
+      所以 setup 永远以"体检: warn (exit=3)"收尾
+    - ⇒ **没有任何官方流程能让 doctor 返回 0**，退出码 3 形同虚设
+  根因: 把「**没启用**」和「**坏了**」混为一谈。
+  另外两个"永远红":
+    - L7 在 pip 安装形态下恒 FAIL（repo_root 落到 .../Lib，找不到 audit.yml）
+    - `pandaone lock` 自己写出的 desktop.ini（.ini 在默认保护扩展名里）
+      让 L1 永久 FAIL —— 用户跑了唯一的官方命令，doctor 反而报红
+
+本版改动（R2-1 ~ R2-6）:
+  R2-1 三态语义（核心）
+     na   = 该层防护**从未配置过** → 报 [N/A]，不计入失败、不影响退出码
+     ok   = 配置过且检查通过
+     fail = **配置过但坏了** → 报 [FAIL]，才计入失败、才影响退出码
+  R2-2 各层"启用过"的判据
+     L1  .pandaone/lock_modes.json 存在（= 跑过 pandaone lock）
+     L2  .pandaone/.watchdog_pid 或 .pandaone/watchdog.log 存在（= 跑过看门狗）
+     L3  .pandaone/pre-commit-check.py 存在，或 hook 内容含 Pandaone 标识
+         （装过又被删掉/被换成空壳 → 判 FAIL —— 这正是要抓的回归）
+     L4  项目根有 README；没有 = 没配置，不是坏
+     L5/L6/L8 沿用既有默认语义；L7 见 R2-4
+  R2-3 L1 零受保护文件 = na（没有可保护的东西，不是失败）
+  R2-4 L7 非源码树形态（pip 安装 / 打包）= na（原来恒 FAIL）
+  R2-5 L2 校验看门狗进程名（PID 残留 + PID 复用 → 原来假绿）
+  R2-6 `--json` 只输出**一个** JSON 对象
+         （原来 --clean-conflicts / --install-git 各打一份 JSON，
+           再打一份报告 → stdout 两份 JSON → json.loads 报 "Extra data"）
+
 层级结果 schema:
-  {"ok": bool, "note": str, "na": bool(可选), "warn": bool(可选)}
-  - na=True  → 该层在当前环境**不适用**，不参与 overall_ok 判定
-  - warn=True→ 通过但有提醒（例如 L5 形态切换），不参与失败判定
+  {"ok": bool, "note": str, "state": "na"|"ok"|"fail", "na": bool(可选), "warn": bool(可选)}
+  - state="na"  → 该层在当前环境**不适用/未启用**，不参与 overall_ok 判定
+  - warn=True   → 通过但有提醒（例如 L5 形态切换），不参与失败判定
   note 一律是英文技术描述（与既有 L1/L2/L3 note 一致），不走 i18n。
 """
 from __future__ import annotations
@@ -80,25 +114,32 @@ from pathlib import Path as _Path
 _NA = "na"
 _WARN = "warn"
 
+#: 三态取值
+_STATE_NA = "na"
+_STATE_OK = "ok"
+_STATE_FAIL = "fail"
+
 
 def _layer(ok: bool, note: str, na: bool = False, warn: bool = False) -> dict:
     """构造一个层级结果 dict。
 
     ok   —— 该层是否通过（na=True 时恒为 True，不参与失败判定）
     note —— 人类可读说明（英文技术描述，不走 i18n）
-    na   —— 该层在当前环境**不适用**（显式标记，排除出 overall_ok）
+    na   —— 该层在当前环境**不适用 / 从未启用**（显式标记，排除出 overall_ok）
     warn —— 通过但有提醒（例如 L5 形态切换，基线不可比）
+    state—— 三态归一化结果："na" / "ok" / "fail"（v0.7.34.0 R2 新增）
     """
     info = {"ok": bool(ok), "note": note}
     if na:
         info[_NA] = True
     if warn:
         info[_WARN] = True
+    info["state"] = _STATE_NA if na else (_STATE_OK if ok else _STATE_FAIL)
     return info
 
 
 def _na_layer(note: str) -> dict:
-    """显式标记"不适用"的层。"""
+    """显式标记"不适用 / 未启用"的层（不计入失败、不影响退出码）。"""
     return _layer(True, note, na=True)
 
 
@@ -157,6 +198,91 @@ def _find_readme(root: _Path):
 
 
 # ============================================================
+# 0.5 进程探针（S5: 看门狗 PID 复用假绿）
+# ============================================================
+
+def _process_name(pid):
+    """返回 pid 对应进程的**进程名**；查不到返回 None。
+
+    Windows: tasklist /FI "PID eq N" /FO CSV /NH
+    POSIX  : /proc/<pid>/comm（取不到再退回 psutil）
+
+    为什么需要它（S5）:
+      L2 原来只看"PID 还活着"。看门狗被强杀后 pid 文件残留，
+      而 PID 会被系统回收复用 —— 别的进程（比如浏览器）拿到了同一个 PID，
+      _pid_alive 返回 True → L2 假绿。只有"进程名也像看门狗"才算真活着。
+    """
+    try:
+        pid = int(str(pid).strip())
+    except Exception:
+        return None
+    if pid <= 0:
+        return None
+    if _sys.platform.startswith("win"):
+        try:
+            r = _subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=15,
+            )
+        except Exception:
+            return None
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if not line or line.upper().startswith("INFO:"):
+                continue
+            parts = [p.strip().strip('"') for p in line.split(",")]
+            if len(parts) >= 2 and parts[1] == str(pid):
+                return parts[0]
+        return None
+    try:
+        comm = _Path(f"/proc/{pid}/comm")
+        if comm.exists():
+            return comm.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:
+        pass
+    try:
+        import psutil
+        return psutil.Process(pid).name()
+    except Exception:
+        return None
+
+
+def _process_cmdline(pid) -> str:
+    """返回 pid 的命令行（仅 POSIX 有 /proc）；拿不到返回空串。"""
+    try:
+        pid = int(str(pid).strip())
+        raw = _Path(f"/proc/{pid}/cmdline").read_bytes()
+    except Exception:
+        return ""
+    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+
+
+def _watchdog_process_verdict(name):
+    """判断进程名是不是 pandaone 看门狗。
+
+    返回 (verdict, detail)：
+      'ok'      —— 明确是 pandaone 进程
+      'unknown' —— 名字不足以判断（源码形态下是 python.exe）→ 不据此判失败
+      'reused'  —— 明确是别的程序 → PID 被复用 → 判失败
+
+    保守原则: 只有"明确不是看门狗"才判失败。
+    源码形态下看门狗是 `python -m pandaone_guard`，进程名只有 python.exe，
+    单看名字分不出来 —— 这种情况下要靠 /proc/<pid>/cmdline 补证，
+    补不到就只提示"无法核实"，绝不误报（误报一次，用户就不信 doctor 了）。
+    """
+    n = (name or "").strip().lower()
+    if not n:
+        return "unknown", ""
+    if "pandaone" in n:
+        return "ok", n
+    stem = n[:-4] if n.endswith(".exe") else n
+    if stem in ("python", "pythonw", "python3", "python3w", "py"):
+        return "unknown", n
+    return "reused", n
+
+
+# ============================================================
 # 1. 各层真检
 # ============================================================
 
@@ -173,6 +299,11 @@ def _check_layer1_file_lock(root: _Path) -> dict:
       - 计数算法: cli_chunks/part_004.py cmd_status 的 locked/unlocked 统计
         （用 st_mode & stat.S_IWUSR 判定，不用 os.access —— root 下 os.access
           对 444 文件也返回 True，L1 锁对 root 等于没有）
+
+    v0.7.34.0 R2 三态:
+      - 从没跑过 lock（没有 .pandaone/lock_modes.json）→ N/A，不是失败
+      - 零受保护文件（没有可保护的东西）→ N/A，不是失败
+      - 跑过 lock 但文件又可写了 → FAIL（这才是真的坏了）
     """
     config_path = root / ".pandaone" / "config.json"
     config = {}
@@ -204,7 +335,14 @@ def _check_layer1_file_lock(root: _Path) -> dict:
                 writable += 1
         except OSError:
             continue
-    if total > 0 and writable == 0:
+    # R2-3: 零受保护文件 = 没有可保护的东西 → N/A（原来落进 else 判 FAIL）
+    if total == 0:
+        return _na_layer("N/A - no protected files in this project (nothing to lock)")
+    # R2-2: 从没跑过 lock → 该层"未启用" → N/A，不计入失败
+    lock_modes = root / ".pandaone" / "lock_modes.json"
+    if not lock_modes.exists():
+        return _na_layer("N/A - lock never applied (no .pandaone/lock_modes.json)")
+    if writable == 0:
         return _layer(True, f"{total}/{total} protected files locked (read-only)")
     return _layer(False, f"{writable}/{total} protected files writable")
 
@@ -215,9 +353,20 @@ def _check_layer2_watchdog(root: _Path) -> dict:
     复用点:
       - git 探测: git_installer._find_git_executable + _can_run_git
       - 进程存活: pandaone.cli._pid_alive（= cli_chunks/part_004.py 的实现）
+
+    v0.7.34.0 R2 三态:
+      - 从没跑过看门狗（既没有 .watchdog_pid 也没有 watchdog.log）→ N/A
+      - 跑过但现在坏了（进程不在 / PID 被复用 / 没有 baseline commit）→ FAIL
     """
     problems = []
     notes = []
+
+    # (0) R2-2 三态: 该层是否"配置过"
+    #     证据 = 看门狗跑过的痕迹：pid 文件（正在跑）或 watchdog.log（跑过）
+    pid_path = root / ".pandaone" / ".watchdog_pid"
+    log_path = root / ".pandaone" / "watchdog.log"
+    if not pid_path.exists() and not log_path.exists():
+        return _na_layer("N/A - watchdog never started (no .watchdog_pid / watchdog.log)")
 
     # (1) watchdog 是 L2 的真依赖 —— 从 L4 挪过来（L4 查错了对象）
     try:
@@ -255,8 +404,7 @@ def _check_layer2_watchdog(root: _Path) -> dict:
     except Exception as e:
         problems.append(f"baseline commit probe failed: {e}")
 
-    # (4) watchdog 进程存活
-    pid_path = root / ".pandaone" / ".watchdog_pid"
+    # (4) watchdog 进程存活（R2-5: 还要校验进程名，防 PID 复用假绿）
     if not pid_path.exists():
         problems.append("watchdog NOT running (no .watchdog_pid)")
     else:
@@ -273,7 +421,9 @@ def _check_layer2_watchdog(root: _Path) -> dict:
                 alive = False
                 problems.append(f"pid liveness probe failed: {e}")
             if alive:
-                notes.append(f"watchdog alive (pid {pid_text})")
+                n_ok, n_bad = _watchdog_alive_notes(pid_text)
+                notes.extend(n_ok)
+                problems.extend(n_bad)
             else:
                 problems.append(f"watchdog process NOT alive (pid {pid_text})")
 
@@ -289,6 +439,28 @@ def _check_layer2_watchdog(root: _Path) -> dict:
     if problems:
         return _layer(False, "; ".join(problems))
     return _layer(True, "; ".join(notes))
+
+
+def _watchdog_alive_notes(pid_text):
+    """PID 还活着时，校验"这个进程确实是看门狗"（S5: 防 PID 复用假绿）。
+
+    返回 (notes, problems) 两个列表：
+      - 进程名明确不是看门狗 → problems 非空（PID 被复用 → 假绿 → 判 FAIL）
+      - 名字不足以判断（源码形态是 python.exe）→ 只放 notes，**不**判失败
+    """
+    name = _process_name(pid_text)
+    verdict, detail = _watchdog_process_verdict(name)
+    if verdict == "reused":
+        return ([], [f"watchdog pid {pid_text} reused by unrelated process ({detail})"])
+    if verdict == "ok":
+        return ([f"watchdog alive (pid {pid_text}, {detail})"], [])
+    # unknown: 名字不足以判断（源码形态是 python.exe）→ 用 /proc 补证
+    cmdline = _process_cmdline(pid_text)
+    if "pandaone" in cmdline.lower():
+        return ([f"watchdog alive (pid {pid_text}, {detail or 'python'})"], [])
+    if detail:
+        return ([f"watchdog alive (pid {pid_text}, process name {detail} not verifiable)"], [])
+    return ([f"watchdog alive (pid {pid_text})"], [])
 
 
 def _probe_install_hook_module():
@@ -338,18 +510,39 @@ def _check_layer3_pre_commit(root: _Path) -> dict:
     """v0.7.34.0: L3 真检 —— pre-commit hook 是不是**真的**装好且能拦人。
 
     之前只看 git 装没装 —— git 装了就算 OK，连 hook 文件在不在都不看。
+
+    v0.7.34.0 R2 三态:
+      - 从没装过 hook（既没有 .pandaone/pre-commit-check.py，
+        hook 文件也不带 Pandaone 标识）→ N/A
+      - 装过但现在被删了 / 被换成空壳 / CRLF / 脚本坏了 → FAIL
+        （这正是要抓的回归 —— 门禁被摘掉还装作没事）
     """
     if _git_executable() is None:
         return _na_layer("N/A - requires git (L3 pre-commit hook disabled)")
 
-    # (a) hook 文件在不在
     hook_path = root / ".git" / "hooks" / "pre-commit"
+    check_py = root / ".pandaone" / "pre-commit-check.py"
+
+    hook_data = None
+    if hook_path.exists():
+        try:
+            hook_data = hook_path.read_bytes()
+        except Exception:
+            hook_data = None
+
+    # R2-2 三态: 该层是否"配置过"
+    #   证据 = 检查脚本在（装 hook 的副产物）或 hook 本身带 Pandaone 标识。
+    #   两个都没有 → 用户从没在这装过 → N/A（不是"坏了"）。
+    ours_hook = bool(hook_data) and b"Pandaone" in hook_data
+    if not check_py.exists() and not ours_hook:
+        return _na_layer("N/A - pre-commit hook never installed (L3 not enabled)")
+
+    # (a) hook 文件在不在
     if not hook_path.exists():
         return _layer(False, f"hook NOT installed ({hook_path})")
-    try:
-        data = hook_path.read_bytes()
-    except Exception as e:
-        return _layer(False, f"hook unreadable: {e}")
+    if hook_data is None:
+        return _layer(False, f"hook unreadable: {hook_path}")
+    data = hook_data
 
     # (b) 归属校验 —— 判据同 install_hook.uninstall_hook（内容含 "Pandaone"）
     if "Pandaone" not in data.decode("utf-8", errors="ignore"):
@@ -362,7 +555,6 @@ def _check_layer3_pre_commit(root: _Path) -> dict:
         return _layer(False, "hook has CRLF line endings (bash hook would fail)")
 
     # (d) pre-commit-check.py 存在且能被编译
-    check_py = root / ".pandaone" / "pre-commit-check.py"
     if not check_py.exists():
         return _layer(False, f"pre-commit-check.py NOT installed ({check_py})")
     try:
@@ -398,10 +590,12 @@ def _check_layer4_startup(root: _Path) -> dict:
     之前 L4 查的是 `import watchdog`，但 watchdog 是 **L2** 的依赖（已挪过去）；
     L4 的真实机制是"每次启动自动加载项目 README 摘要"
     （cli_chunks/part_001.py 的 load_readme_summary，由 part_006.py 的 main 调用）。
+
+    v0.7.34.0 R2 三态: 项目根没有 README = "没配置过"，不是"坏了" → N/A。
     """
     readme = _find_readme(root)
     if readme is None:
-        return _layer(False, "README NOT found in project root (startup summary unavailable)")
+        return _na_layer("N/A - no README in project root (startup summary not configured)")
     try:
         readme.read_text(encoding="utf-8")
     except Exception as e:
@@ -442,6 +636,9 @@ def _check_layer5_self_fingerprint(root: _Path) -> dict:
     自检，那不是"首次运行"，是基线缺失。
 
     存储格式解析走 fp_security.load_fp_record（兼容旧裸 hex + 新 json）。
+
+    v0.7.34.0 R2: L5 是**机器级**的（指纹文件在用户主目录，不在项目里），
+    沿用既有语义不变。
     """
     try:
         from pandaone.cli import compute_fingerprint, FP_PATH
@@ -494,6 +691,11 @@ def _check_layer6_tamper_detection(root: _Path) -> dict:
     之前只 count('"APPROVED"') / count('"REJECTED"')，**漏掉 UNAUTHORIZED**
     —— 而那才是 watchdog 抓到的真篡改（pandaone_guard/__main__.py 写的就是
     这个状态）。计数法照抄 cli_chunks/part_004.py cmd_status 的逐行 JSON 解析。
+
+    v0.7.34.0 R2 三态:
+      - 从没有审计记录（没有日志 / 日志为空）→ N/A（不是"坏了"）
+      - 日志被删（项目已 init 却没有日志）→ FAIL（基线缺失）
+      - 有记录且含 UNAUTHORIZED → FAIL（真篡改）
     """
     root_log = root / ".pandaone" / "pandaone.jsonl"
     root_cfg = root / ".pandaone" / "config.json"
@@ -508,7 +710,7 @@ def _check_layer6_tamper_detection(root: _Path) -> dict:
         pkg_root = _Path(__file__).resolve().parent.parent.parent
         pkg_log = pkg_root / ".pandaone" / "pandaone.jsonl"
         if not pkg_log.exists():
-            return _layer(True, "no audit log yet (clean state)")
+            return _na_layer("N/A - no audit log yet (clean state)")
         audit_log = pkg_log
     records = []
     try:
@@ -522,6 +724,9 @@ def _check_layer6_tamper_detection(root: _Path) -> dict:
                 continue
     except Exception as e:
         return _layer(False, f"audit read failed: {e}")
+    if not records:
+        # R2-2: 一条审计记录都没有 = 这一层从没被用过 → N/A
+        return _na_layer("N/A - audit log empty (no audit record yet)")
     approved = sum(1 for r in records if r.get("status") == "APPROVED")
     rejected = sum(1 for r in records if r.get("status") == "REJECTED")
     unauthorized = sum(1 for r in records if r.get("status") == "UNAUTHORIZED")
@@ -535,15 +740,31 @@ def _check_layer6_tamper_detection(root: _Path) -> dict:
 
 
 def _check_layer7_ci_audit() -> dict:
-    """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)"""
-    # v0.7.24: 打包成 .exe 之后没有 .github/workflows/audit.yml ——
-    # CI 配置属于源码仓库，不进安装包。这里报 N/A 而不是 FAIL，
-    # 否则 doctor 在打包态永远是红的，掩盖真正的问题。
+    """v0.7.19: 真查 .github/workflows/audit.yml + pull_request trigger (替代 L7 字面量)
+
+    v0.7.24: 打包成 .exe 之后没有 .github/workflows/audit.yml ——
+    CI 配置属于源码仓库，不进安装包。这里报 N/A 而不是 FAIL，
+    否则 doctor 在打包态永远是红的，掩盖真正的问题。
+
+    v0.7.34.0 R2-4: **pip 安装形态**原来恒 FAIL ——
+      pip 形态下 __file__ = .../Python311/Lib/site-packages/pandaone/cmd_doctor.py
+      → repo_root = .../Python311/Lib → 那里没有 audit.yml → FAIL
+      → 所有 PyPI 用户的 doctor 永远 exit 3。
+      判据: 非源码树一律 N/A。源码树 = repo_root 下有 pyproject.toml 或 .git
+      （只有源码树才谈得上"CI 审计"）。
+    """
+    # v0.7.24: 打包形态（frozen）—— CI 配置不进安装包
     if getattr(_sys, "_MEIPASS", None):
         return _na_layer("not applicable (packaged build; CI workflow lives in the source repo)")
     # v0.7.19 fix: 用 __file__ 派生 repo root (不依赖 from pandaone.cli import ROOT, 避免 sys.modules cache 污染)
     # __file__ = src/pandaone/cmd_doctor.py, dirname 2 次上溯 = repo root
     repo_root = _Path(__file__).resolve().parent.parent.parent
+    # R2-4: pip 安装形态下 repo_root 落在 .../Lib —— 既没有 pyproject.toml
+    #   也没有 .git → 不是源码树 → CI 审计不适用 → N/A（不是 FAIL）
+    if not ((repo_root / "pyproject.toml").exists() or (repo_root / ".git").exists()):
+        return _na_layer(
+            "not applicable (not a source checkout; CI workflow lives in the source repo)"
+        )
     workflow = repo_root / ".github" / "workflows" / "audit.yml"
     if not workflow.exists():
         return _layer(False, f"{workflow} NOT found")
@@ -585,6 +806,9 @@ def _collect_report(root=None):
     v0.7.34.0:
       - 所有**项目级**检查都基于 root（不再绑死 cwd）
       - overall_ok 现在**吃层级失败**（排除显式标记 N/A 的层）
+    v0.7.34.0 R2（三态）:
+      - 只有处于 fail 态的层进 failed_layers，才影响 overall_ok 与退出码
+      - na 态（未启用 / 不适用）的层单独列在 na_layers 里
     """
     from pandaone.git_installer import (
         is_installed as _git_installed,
@@ -627,9 +851,11 @@ def _collect_report(root=None):
         "L8_path_conflict": _check_layer8_path_conflict(),
     }
 
-    # N/A 的层不参与判定（显式标记，不是"沉默的通过"）
+    # R2: na 态的层不参与判定（显式标记，不是"沉默的通过"）；
+    #      只有 fail 态的层进失败列表 → 才影响 overall_ok 与退出码。
     applicable = {name: info for name, info in layers.items() if not info.get(_NA)}
     failed_layers = [name for name, info in applicable.items() if not info.get("ok")]
+    na_layers = [name for name, info in layers.items() if info.get(_NA)]
     layers_ok = not failed_layers
 
     return {
@@ -637,6 +863,7 @@ def _collect_report(root=None):
         "root": str(root),
         "layers": layers,
         "failed_layers": failed_layers,
+        "na_layers": na_layers,
         "overall_ok": git_section["installed"] and py_section["ok"] and layers_ok,
     }
 
@@ -679,6 +906,20 @@ def add_doctor_parser(sub_parsers_action):
     )
 
 
+def _json_payload(report, steps=None) -> dict:
+    """把报告 + 操作步骤合成**唯一**一个 JSON 对象（v0.7.34.0 R2-6）。
+
+    为什么: 原来 --clean-conflicts / --install-git 各自 print 一份 JSON，
+    最后再 print 一份报告 → stdout 上有**两份** JSON → 机器端
+    json.loads 直接报 "Extra data: line 2 column 1"。
+    现在所有步骤合并进报告对象的 "steps"，stdout 永远只有一个 JSON 文档。
+    """
+    payload = dict(report)
+    if steps:
+        payload["steps"] = list(steps)
+    return payload
+
+
 def cmd_doctor(args):
     """PR #28 — 系统健康检查 + 缺失依赖自动安装。
 
@@ -687,6 +928,10 @@ def cmd_doctor(args):
       1 = 缺 git（既有语义不变）
       2 = Python 过旧（既有语义不变）
       3 = 有层级 FAIL（新增 —— 之前层失败也被当成"全部正常"）
+
+    v0.7.34.0 R2:
+      - 只有 fail 态的层才影响退出码；na 态（未启用）不影响
+      - --json 模式只输出一个 JSON 对象
     """
     _ensure_i18n_extras()
     try:
@@ -702,6 +947,9 @@ def cmd_doctor(args):
     want_clean = getattr(args, 'clean_conflicts', False) is True
     root = _resolve_root(getattr(args, 'root', None))
 
+    # R2-6: 所有"步骤"先攒起来，最后和报告合成**一个** JSON 输出。
+    steps = []
+
     if want_clean:
         # v0.7.28.0: 清理 PATH 里抢占命令的旧版 pandaone。
         #   放在 doctor 里是因为它本来就是"诊断 + 修复"工具（已有 --install-git 先例），
@@ -709,39 +957,25 @@ def cmd_doctor(args):
         try:
             from pandaone.cmd_setup import clean_path_conflicts as _clean
             status, msg = _clean()
-            if want_json:
-                print(_json.dumps({'step': 'clean_conflicts', 'status': status,
-                                   'message': msg}, ensure_ascii=False))
-            else:
+            steps.append({'step': 'clean_conflicts', 'status': status, 'message': msg})
+            if not want_json:
                 print(f'[{"OK" if status == "ok" else status.upper()}] {msg}')
         except Exception as e:
-            if want_json:
-                print(_json.dumps({'step': 'clean_conflicts', 'status': 'warn',
-                                   'error': str(e)}, ensure_ascii=False))
-            else:
+            steps.append({'step': 'clean_conflicts', 'status': 'warn', 'error': str(e)})
+            if not want_json:
                 print(f'[WARN] {e}')
-        report = _collect_report(root)
-        if want_json:
-            print(_json.dumps(report, ensure_ascii=False, indent=2))
-        else:
-            _print_human_report(report)
-        return _exit_code(report)
 
     report = _collect_report(root)
     git_status = report['git']
 
     if want_install and not git_status['installed']:
-        if want_json:
-            print(_json.dumps({'step': 'install_git', 'status': 'starting'}, ensure_ascii=False))
-
         from pandaone.git_installer import install as _git_install, GitInstallError
         try:
             result = _git_install()
         except GitInstallError as e:
+            steps.append({'step': 'install_git', 'status': 'failed', 'error': str(e)})
             if want_json:
-                print(_json.dumps({
-                    'step': 'install_git', 'status': 'failed', 'error': str(e),
-                }, ensure_ascii=False))
+                print(_json.dumps(_json_payload(report, steps), ensure_ascii=False, indent=2))
             else:
                 print(t('_doctor_git_install_failed'))
                 print(str(e))
@@ -750,12 +984,11 @@ def cmd_doctor(args):
                 print(get_install_hint())
             return 1
 
-        if want_json:
-            print(_json.dumps({
-                'step': 'install_git', 'status': 'ok',
-                'channel': result.channel, 'version': result.version, 'path': result.path,
-            }, ensure_ascii=False))
-        else:
+        steps.append({
+            'step': 'install_git', 'status': 'ok',
+            'channel': result.channel, 'version': result.version, 'path': result.path,
+        })
+        if not want_json:
             print(t('_doctor_git_installed_via', channel=result.channel))
             print(t('_doctor_git_version', ver=result.version))
             print(t('_doctor_restart_shell_hint'))
@@ -764,7 +997,7 @@ def cmd_doctor(args):
         git_status = report['git']
 
     if want_json:
-        print(_json.dumps(report, ensure_ascii=False, indent=2))
+        print(_json.dumps(_json_payload(report, steps), ensure_ascii=False, indent=2))
     else:
         _print_human_report(report)
 
@@ -772,7 +1005,10 @@ def cmd_doctor(args):
 
 
 def _exit_code(report) -> int:
-    """退出码语义 —— 层级失败必须体现在退出码上（v0.7.34.0 核心修复）。"""
+    """退出码语义 —— 层级失败必须体现在退出码上（v0.7.34.0 核心修复）。
+
+    R2: na 态的层不参与（未启用 ≠ 坏了），只有 fail 态才把退出码顶到 3。
+    """
     if not report['git']['installed']:
         return 1
     if report['python']['too_old']:
