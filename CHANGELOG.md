@@ -2,6 +2,130 @@
 
 All notable changes to Pandaone AI Agent will be documented in this file.
 
+## [0.7.34.0] - 2026-10-28
+
+**把 `doctor` 从「存在性体检」改造成「可执行性体检」，并修掉 Windows 上两个真实用户会踩的坑。**
+
+本版起因是 v0.7.33.0 的真机回归教训：`install-hook` 在 exe 形态下完全失效，而 `doctor` 的 L3 层只检查
+"hook 文件在不在"、不检查"安装命令能不能跑"，所以整个缺陷长期潜伏、doctor 一直报 `[OK]`。
+**"状态全绿"不等于"功能可用"** —— 这一版把这件事从根上解决。
+
+### 本次发布包含什么
+
+| 来源版本 | 主题 |
+|---|---|
+| 0.7.34.0 | **doctor 8 层全部改成真检查**：从"存在性代理"变成"该防护实际能不能工作"，并首次让层级失败真正反映到退出码 |
+| 0.7.34.0 | **修静默安装不更新 IDE 的 MCP 配置**：用户升级后 IDE 里仍跑旧版 MCP，v0.7.31.0 修的编码 bug 完全不生效 |
+| 0.7.34.0 | **修 Windows 上 `SO_REUSEADDR` 允许抢占他人监听端口**：同机并发跑两个 `pandaone serve` 会共享端口、请求被随机分发 |
+| 0.7.34.0 | `_load_install_hook_module` 源码形态路径修正（原实现恒返回 None） |
+
+### Fixed: `doctor` 的 8 层里有 5 层是「存在性判定」
+
+**症状**：某层防护实际已经失效，`doctor` 却报 `[OK]`。
+
+**根因**：`cmd_doctor.py` 里 L1/L2/L3 是**内联字面量**，连独立的 check 函数都没有：
+
+- **L1_file_lock**：`{"ok": True, "note": "python-only (attrib/chmod)"}` —— **无条件 True**，从不实际检查。
+  项目从没执行过 `pandaone lock`，doctor 照样报 L1 就绪。
+- **L2_watchdog_rollback** / **L3_pre_commit_hook**：`ok = git 是否安装` —— git 装了就算 OK。
+  看门狗进程没起、hook 根本没装、`protected_extensions` 为空、hook 被改成 `exit 0` 空壳，全部报 OK。
+- **L4_startup_check**：查的是 `import watchdog`（那是 L2 的依赖），而 L4 的真实机制是"启动时加载项目 README 摘要"。
+- **L6_tamper_detection**：只数 `APPROVED` / `REJECTED`，**漏掉 `UNAUTHORIZED`** —— 而 `UNAUTHORIZED` 才是
+  看门狗抓到的真篡改状态。一份满是 UNAUTHORIZED 的日志，doctor 会显示"0 APPROVED + 0 REJECTED"，看起来比干净还干净。
+- **L7_ci_audit**：用 `__file__` 上溯三级定位 CI 配置，pip 安装形态下解析到 `site-packages/Lib` → **恒 FAIL**。
+
+**更严重的是汇总层**：`overall_ok` 与退出码原本只看 git 与 Python，**层失败完全不影响结果** ——
+即使各层判成 FAIL，doctor 照样打印"全部正常"、exit 0。所以不先修汇总层，其他改动全被吃掉。
+
+**修法**：
+
+1. **汇总层先修**：新增 `--root`（默认 cwd），`overall_ok` 纳入层结果，新增退出码 **3**（1=缺 git / 2=Python 过旧 语义不变），
+   报告不再打"全部正常"横幅。
+2. **每层改成真检查**：
+   - L1 枚举受保护文件、统计可写数（复用 `cmd_status` 已有的锁定计数算法）
+   - L2 检查 watchdog 可导入 + git **可执行**（`_can_run_git`）+ 有 baseline commit + **看门狗 PID 存活** + frozen 下 `pandaone_guard.exe` 在位
+   - L3 检查 hook 存在 + **归属是本工具的**（含 `Pandaone` 标识）+ **LF-only 无 BOM** + check 脚本可编译 +
+     **`install-hook` 模块在当前形态可加载** + `protected_extensions` 非空
+   - L4 改查 README 摘要加载
+   - L5 **先比 `form` 再比 hash**（源码/exe 切换只 WARN，不再误报 TAMPERED）
+   - L6 逐行 JSON 解析三态计数，`UNAUTHORIZED > 0` 判 FAIL；审计基线被删判 FAIL
+   - L7 改为源码树专属判定（非源码树一律 N/A）
+3. **层状态三态化**：区分「**未启用**」「正常」「**已启用但坏了**」。只有第三种才判 FAIL、才影响退出码。
+   —— 否则刚 `init` 的普通项目会因为"没 lock、没装 hook"而 4 层全红、exit 3，
+   而 `pandaone setup` 本身又不执行 lock 与 install-hook，**没有任何官方流程能让 doctor 返回 0**。
+
+**新增回归测试**：`tests/test_cmd_doctor_layers.py`（34 条）+ 扩写 `tests/test_cmd_doctor.py`。
+此前 doctor 的测试**只断言 7 个层名存在**，没有任何一条断言"某层能判 FAIL" —— 这正是缺陷能长期存活的原因。
+
+### Fixed: 静默安装不更新 IDE 的 MCP 配置（用户升级后仍跑旧版 MCP）
+
+**症状**：用户从 0.7.21.3 升级到 0.7.33.0，IDE 里的 MCP 仍���旧版本，**v0.7.31.0 修的 GBK/UTF-8 编码 bug
+完全不生效**，`tools/call` 整条链路继续返回 `isError=true`。
+
+**根因（比表面原因深一层）**：`codeaudit.iss` 的 `[Run]` 段里 install-mcp 条目带 `skipifsilent`，
+**且** `[Tasks]` 里的 `installmcp` 任务本身带 `Flags: unchecked`（默认不勾选）。
+Inno Setup 6 文档明确写着：带 `Tasks:` 的 `[Run]` 条目**只有用户选中该任务才会被处理** ——
+所以静默安装下这条根本不执行。
+
+叠加放大：同一次静默安装里 `doctor --clean-conflicts`（**没有** `skipifsilent`，注释明说"静默安装正是需要清理的场景"）
+会把 pip 版 `pandaone-mcp.exe` 改名备份，而 IDE 配置里的**裸名** `pandaone-mcp` 此时可能直接指向被改名的文件而启动失败。
+
+**修法**：三处同时改 —— 去掉 `skipifsilent`、去掉 `Flags: unchecked`、加 `UsePreviousTasks=no`（防止升级安装继承上次"已取消勾选"的状态）；
+并把 install-mcp 排到 `doctor --clean-conflicts` **之前**，先把 IDE 配置改写成新版本绝对路径再去清理旧版。
+
+**副作用声明**：加 `UsePreviousTasks=no` 会重置任务选择状态，因此**用户此前显式取消过 installmcp 的选择会被覆盖**，
+升级后 IDE 配置会被重新写入。缓解是充分的（只改 `mcpServers.pandaone`、写前备份），
+但知情权归用户 —— 需要保持原状请在升级后重新勾掉，或改用非静默安装。
+
+> 顺带修正：复核确认 `UsePreviousTasks=no` 在 Inno Setup 6 下会让 `checkedonce` 标志失效，
+> 这**反而修好了** `addtopath` 任务升级时被跳过、PATH 前置不更新的老问题。
+
+### Fixed: Windows 上 `SO_REUSEADDR` 允许抢占他人已监听的端口
+
+**症状**：同机并发跑两个 `pandaone serve`（例如一边跑全量测试一边开看板），两个进程**共享同一端口**，
+请求被随机分发给其中一个，另一个直接被 RST（`WinError 10054`）。`tests/test_pandax_serve.py`
+在 Windows 全量并发下偶发 4 例失败，而**单跑 20/20 全绿**、CI 是 Linux 从不复现。
+
+**根因**：`socketserver.TCPServer.allow_reuse_address` 默认为 1 会设 `SO_REUSEADDR`，
+而 **Windows 上 `SO_REUSEADDR` 允许第二个 socket 抢占别人已在 LISTEN 的端口**（Linux 上同样 bind 直接 `EADDRINUSE`）。
+实测 Windows + Python 3.11：不带 `SO_REUSEADDR` 的 bind 失败 `errno=10048`，带的 bind 反而成功。
+
+叠加两个放大因素：`start_server` 先用 `_find_free_port()` 探测再让 server 重新 bind，
+探测（bind 完立刻 close）与真 bind 之间存在 **TOCTOU 窗口**；测试用例把端口写死成 19000/19100/19200-19204，
+URL 也不取 `server.server_address[1]`，于是 `start_server` 顺延后测试打的是**别人的服务**。
+
+**修法**：新增 `_PandaoneHTTPServer`，Windows 上 `allow_reuse_address=False`（Linux/macOS 保留 True 以维持 TIME_WAIT 快速重用），
+`server_bind` 改为**原子占端口**（真 bind 成功才算占用，失败顺延到下一个，上限 20 个），
+消除探测-占用的 TOCTOU 窗口；实际端口一律以 `server.server_address[1]` 为准。
+测试侧改为向 OS 借端口（bind port 0）并使用实际绑定端口，另加端口隔离回归用例。
+
+**验证**：3 个 pytest 进程并发 × 3 轮 = 9/9 全绿（修复前同条件下 16 例失败）；全量套件 547 passed。
+
+### Fixed: `_load_install_hook_module` 源码形态路径恒失效
+
+原实现用 `Path(__file__).resolve().parent.parent / "install_hook.py"`，但 `cli.py` 加载完 chunk 后会把 `__file__`
+恢复成 `cli.py` 的路径 → 解析到 `<repo>/src/install_hook.py`（不存在）→ **源码形态下该函数恒返回 None**。
+
+对已发布的 v0.7.33.0 **无用户影响**（该函数只被 frozen 分支调用，源码形态走 subprocess 分支），
+但它会让**新的 doctor L3 真检在源码形态下永远误红**。改为同时保留 `parent` 与 `parent.parent` 两个候选路径。
+
+### 升级指引
+
+- **从 0.7.21.3 或更早版本升级**：直接 `pip install --upgrade pandaone-guard` 即可。
+  已实测 0.7.21.3(exe) → 0.7.34.0(exe) 与 0.7.21.3(pip) → 0.7.34.0(exe) **两条路径都不会触发指纹自锁**
+  （版本号变化走 auto-refresh 分支，该分支排在形态判断之前；0.7.21.3 的 JSON 指纹缺 `form` 字段也有兜底）。
+- **升级后建议手动跑一次** `pandaone install-mcp --client auto --absolute-command`，
+  确保 IDE 里的 MCP 指向新版本绝对路径。
+- **若 doctor 报某一层 FAIL**：先看该层 note 说明的原因。v0.7.34.0 起 doctor 区分「未启用（N/A）」与
+  「已启用但坏了（FAIL）」，只有后者才影响退出码。
+
+### 关于版本号从 0.7.21.3 跳到 0.7.34.0
+
+0.7.22 ~ 0.7.32 这批版本号**从未对外发布过**（一直在开发分支上流转）。
+其中 0.7.24 / 0.7.25 / 0.7.26 / 0.7.31 / 0.7.32 真正落地成版本号，0.7.22 / 0.7.23 只活在源码注释里，
+0.7.27 ~ 0.7.30 是提交信息里的分组标签。**因此本版是一次聚合发布**，不是逐版演进。
+本版不补发过渡版 —— 补一个 `0.7.21.4` 无法消除跳跃，反而会造出一个既不属于 0.7.21 也不属于 0.7.34 的空壳版本。
+
 ## [0.7.33.0] - 2026-10-26
 
 **自 v0.7.21.3 之后的第一个对外发布版本。**
