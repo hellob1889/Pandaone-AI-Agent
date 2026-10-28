@@ -163,6 +163,18 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
         True = 通过 (auto-refresh 成功 / hash match / 首次生成)
         False = 失败 (strict 模式 hash mismatch / 同版本 hash 变)
     silent=True → 不打印任何错误（用于 --trust-default 模式）
+
+    v0.7.34.0 — **stdout / stderr 契约**:
+        本函数是 CLI 启动的**公共路径**（每次执行任何子命令都会经过）。
+        机器端消费方（CI 脚本 / IDE 插件 / MCP）对 `pandaone doctor --json`
+        的用法是 **json.loads(整个 stdout)** —— 所以 stdout 上**只能**有那一个
+        JSON 文档。启动路径上的任何提示行都会让它直接抛
+        "Expecting value: line 1 column 2"。
+
+        因此：**所有 info 提示一律走 stderr**（诊断信息 ≠ 命令的正题），
+        stdout 保持干净。终端里 stderr 照样显示，用户可见提示一点没少。
+        ERROR 文案仍留在 stdout —— 那条路径下 CLI 直接 return 1、**根本不输出
+        JSON**，机器端靠退出码分支，不靠解析 stdout（见 test_bug_48_trust_default.py）。
     """
     current = compute_fingerprint()
     current_version = _get_pandaone_version()
@@ -171,7 +183,10 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
         # 首次运行：生成初始指纹 (json 格式)
         _save_fp(current_version, current)
         if not silent:
-            print(t("info_fp_generated", fp=current[:16]))
+            # v0.7.34.0: 提示走 stderr（stdout 只留"命令的正题"）。
+            #   这行只在"指纹不存在 / 需要刷新"时打印 —— 恰好就是用户刚升级完
+            #   的第一个窗口，而那正是机器端第一次跑 doctor --json 的时刻。
+            print(t("info_fp_generated", fp=current[:16]), file=sys.stderr)
         return True
 
     try:
@@ -187,8 +202,9 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
     if migrated:
         _save_fp(current_version, current)
         if not silent:
-            print(t("info_fp_migrated"))
-            print(f"  {t('info_fp_generated', fp=current[:16])}")
+            # v0.7.34.0: 同上，提示一律走 stderr。
+            print(t("info_fp_migrated"), file=sys.stderr)
+            print(f"  {t('info_fp_generated', fp=current[:16])}", file=sys.stderr)
         return True
 
     # hash 匹配
@@ -208,7 +224,8 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
     if stored_version != current_version:
         _save_fp(current_version, current)
         if not silent:
-            print(t("info_fp_auto_refreshed", old_version=stored_version, new_version=current_version, hash=current[:16]))
+            # v0.7.34.0: 提示走 stderr。
+            print(t("info_fp_auto_refreshed", old_version=stored_version, new_version=current_version, hash=current[:16]), file=sys.stderr)
         return True
 
     # 运行形态切换 → auto-refresh
@@ -227,7 +244,8 @@ def check_fingerprint(silent: bool = False, strict: bool = False) -> bool:
     if stored_form != current_form:
         _save_fp(current_version, current)
         if not silent:
-            print(t("info_fp_form_refreshed", old_form=stored_form, new_form=current_form, hash=current[:16]))
+            # v0.7.34.0: 提示走 stderr。
+            print(t("info_fp_form_refreshed", old_form=stored_form, new_form=current_form, hash=current[:16]), file=sys.stderr)
         return True
 
     # 同版本号 + hash 变 = 真篡改
