@@ -238,6 +238,9 @@ class TestLayer2Watchdog:
     def test_l2_fails_without_baseline_commit(self, tmp_path):
         """git 仓库但没有 baseline commit —— watchdog 的 git checkout 回滚必然失败。"""
         p = _project(tmp_path)
+        # v0.7.34.0 R2 三态: 判 FAIL 的前提是"这层配置过"——
+        #   watchdog.log = 看门狗跑过的痕迹（没有它 = 从未启用 = N/A）。
+        (p / ".pandaone" / "watchdog.log").write_text("", encoding="utf-8")
         git = _git_exe()
         assert git, "git 不可用（conftest 应已保证）"
         r = subprocess.run([git, "init", "-q", str(p)],
@@ -249,6 +252,8 @@ class TestLayer2Watchdog:
 
     def test_l2_fails_when_watchdog_not_running(self, tmp_path):
         p = _project(tmp_path)
+        # v0.7.34.0 R2 三态: 判 FAIL 的前提是"这层配置过"（watchdog.log = 跑过的痕迹）
+        (p / ".pandaone" / "watchdog.log").write_text("", encoding="utf-8")
         info = _doc._check_layer2_watchdog(p)
         _assert_real_failure(info)
         assert "watchdog" in info["note"]
@@ -266,6 +271,9 @@ class TestLayer2Watchdog:
 class TestLayer1FileLock:
     def test_l1_fails_when_protected_files_writable(self, tmp_path):
         p = _project(tmp_path)
+        # v0.7.34.0 R2 三态: 判 FAIL 的前提是"跑过 lock"
+        #   （lock_modes.json = lock 跑过的痕迹；没有它 = 从未启用 = N/A）
+        (p / ".pandaone" / "lock_modes.json").write_text("{}", encoding="utf-8")
         info = _doc._check_layer1_file_lock(p)
         _assert_real_failure(info)
         assert "writable" in info["note"]
@@ -274,6 +282,8 @@ class TestLayer1FileLock:
         import os
         import stat as _stat
         p = _project(tmp_path)
+        # v0.7.34.0 R2 三态: "跑过 lock"是前提（lock_modes.json）
+        (p / ".pandaone" / "lock_modes.json").write_text("{}", encoding="utf-8")
         for f in p.rglob("*.py"):
             os.chmod(f, _stat.S_IREAD)
         try:
@@ -337,10 +347,15 @@ class TestLayer6TamperDetection:
 # ============================================================
 
 class TestLayer4Startup:
-    def test_l4_fails_when_readme_missing(self, tmp_path):
+    def test_l4_is_na_when_readme_missing(self, tmp_path):
+        """v0.7.34.0 R2 三态: 项目根没有 README = "没配置过"，不是"坏了" → N/A。
+
+        （上一版把"缺 README"判成 FAIL，导致刚 init 的正常项目永远 exit 3。）
+        """
         p = _project(tmp_path, readme=False)
         info = _doc._check_layer4_startup(p)
-        _assert_real_failure(info)
+        assert info.get("na") is True, info
+        assert info["ok"] is True, info
         assert "README" in info["note"]
 
     def test_l4_ok_with_readme(self, tmp_path):
