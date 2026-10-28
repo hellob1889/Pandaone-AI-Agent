@@ -224,7 +224,7 @@ def test_uninstall_run_fingerprint_path_matches_python_home():
 
 
 def test_uninstall_run_does_not_use_unknown_inno_userprofile_constant():
-    """Inno Setup 6 **没有** userprofile 这个常量 —— 用了 ISCC 会直接编译失败。
+    r"""Inno Setup 6 **没有** userprofile 这个常量 —— 用了 ISCC 会直接编译失败。
 
     本机 Inno Setup 6.7.3 实测: Unknown constant "userprofile"。
     （userappdata 也不行 —— 那是 AppData\Roaming，不是 profile 目录。）
