@@ -213,8 +213,34 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "doctor --clean-conflicts"; Descr
 
 [UninstallRun]
 ; 卸载时清理用户配置（仅 fingerprint）
-Filename: "{cmd}"; Parameters: "/C for /f ""delims="" %%i in ('dir /b /s /ah ""{userdocs}\Pandaone\.pandaone_fp.txt"" 2^>nul') do del /f /q ""%%i"""; Flags: runmaximized
-
+;
+; v0.7.34.0: 改成删**真实路径**上的指纹文件。
+;   指纹文件在 %USERPROFILE%\.pandaone_fp.txt
+;   （Python: fp_security.DEFAULT_FP_PATH = Path.home() / ".pandaone_fp.txt"；
+;     Windows 上 Path.home() = os.path.expanduser("~")，**优先取 USERPROFILE** 环境变量）
+;
+;   旧写法删的是 "Documents\Pandaone" 子目录下的指纹文件 —— 那个目录**从来不存在**，
+;   所以卸载后 ~\.pandaone_fp.txt 一直残留。后果:
+;     重装**同一构建** -> hash 相同 -> 没事；
+;     重装**同版本不同构建**（换构建机重打包）-> 版本同 + 形态同 + hash 变
+;     -> L5 判成真篡改 -> **CLI 全锁死**。
+;
+;   旧写法还有第二个更隐蔽的错: dir /b /s /ah 里的 /ah = **只列隐藏文件**，
+;   而指纹文件是 save_fp() 用 write_text 写的普通文件（属性 Archive，不是 Hidden），
+;   实测 /ah 一条都列不出来 —— 就算路径写对了也照样删不掉。
+;
+;   现在用精确删除，覆盖 ntpath.expanduser 的**全部**取值分支:
+;     1) %USERPROFILE%         —— 由 cmd.exe 展开，和 Python 的 Path.home() 读
+;        **同一个**环境变量，连"profile 被重定向到非标准路径"都能对上；
+;     2) %HOMEDRIVE%%HOMEPATH% —— ntpath.expanduser 的第二个分支
+;        （USERPROFILE 没设时用它），同样由 cmd.exe 展开。
+;   注: **不能**用 Inno 的 userprofile 常量 —— Inno Setup 6 根本没有这个常量，
+;   ISCC 会直接报 Unknown constant "userprofile" 把安装包编译搞挂
+;   （本机 Inno Setup 6.7.3 实测）。userappdata 也不行 —— 那是 AppData\Roaming。
+;   不用 dir /s 递归: 实测在真实 profile 上递归扫一遍要 21 秒（卸载明显卡住），
+;   而且 legacy dir 遇到 >MAX_PATH 会中断枚举，反而删不干净。
+Filename: "{cmd}"; Parameters: "/C del /f /q ""%USERPROFILE%\.pandaone_fp.txt"" 2>nul"; Flags: runmaximized
+Filename: "{cmd}"; Parameters: "/C del /f /q ""%HOMEDRIVE%%HOMEPATH%\.pandaone_fp.txt"" 2>nul"; Flags: runmaximized
 [UninstallDelete]
 ; 清理模板和日志
 Type: filesandordirs; Name: "{app}\templates"
