@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -41,6 +42,13 @@ def _t(key: str, **kw) -> str:
         return t(key, **kw)
     except Exception:
         return key
+
+
+#: upgrade 重启仪表盘时的**默认**期望端口。
+#: 端口文件里记着旧服务的实际端口时会**优先复用**那个端口
+#: （旧服务已停掉，端口应当空出来 → 新服务拿回同一个端口，URL 不变）。
+#: 实际端口始终以 `<root>/.pandaone/serve_port.txt` 为准。
+SERVE_EXPECTED_PORT = 8765
 
 
 COMMAND_NAME = "upgrade"
@@ -279,25 +287,90 @@ def _pids_on_port(port: int) -> list[int]:
     return pids
 
 
-def _restart_serve(root: Path) -> tuple[bool, str]:
-    """重启仪表盘（尽力而为）。"""
+def _read_serve_port(root: Path):
+    """读回 serve **实际**端口（None = 没有端口文件 / 读不到）。"""
     try:
-        from pandaone.pandaone_serve import _find_free_port
-
-        port = _find_free_port()
+        from pandaone.pandaone_serve import read_serve_port
     except Exception:
-        port = 8765
-    stopped = False
-    for pid in _pids_on_port(port):
-        if _kill_pid(pid):
-            stopped = True
-    if not stopped:
-        # 没找到在跑的仪表盘 —— 直接起一个新的
+        return None
+    try:
+        return read_serve_port(root)
+    except Exception:
+        return None
+
+
+def _clear_serve_port_file(root: Path) -> None:
+    """删掉旧端口文件 —— 让"文件重新出现"必然代表**新**服务。"""
+    try:
+        from pandaone.pandaone_serve import clear_serve_port
+    except Exception:
+        return
+    try:
+        clear_serve_port(root)
+    except Exception:
         pass
-    if _is_frozen():
-        cmd = [sys.executable, "serve", "--root", str(root)]
+
+
+def _port_open(host: str, port: int, timeout: float = 0.4) -> bool:
+    """端口是否可连。"""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _restart_serve(root: Path, timeout: float = 10.0) -> tuple[bool, str]:
+    """重启仪表盘（尽力而为）。
+
+    v0.7.34.1：**不再**用探测式的 `_find_free_port()` 决定端口。
+      旧实现有个真实的功能危害：
+        `for pid in _pids_on_port(探测端口): _kill_pid(pid)`
+      探测到的端口完全可能是**别的无关程序**在用（例如用户的 8765 端口跑着
+      别的服务）→ upgrade 会**杀掉那个无关进程**。
+      现在：
+        1. 先读 `<root>/.pandaone/serve_port.txt` 拿**上次实际运行**的端口；
+        2. 只在"该端口上的监听进程 pid == 端口文件里记的 pid"时才 kill
+           —— 确认是我们自己的 serve 才动手；
+        3. 读不到端口文件（服务从未启动过 / 文件被删）→ **一个进程都不杀**，
+           直接启动新的，并在返回消息里说明"未找到旧服务端口，未执行清理"。
+      启动后同样等端口文件更新，拿到**新实际端口**再返回 URL。
+    """
+    notes: list[str] = []
+    old = _read_serve_port(root)
+    expected_port = SERVE_EXPECTED_PORT
+    if old is None:
+        # 没有端口文件 → 无法知道旧服务在哪个端口 → **不杀任何进程**
+        notes.append(_t("upgrade_serve_no_port"))
     else:
-        cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
+        old_port = int(old["port"])
+        old_pid = old.get("pid")
+        # 旧服务被停掉后端口应当空出来 → 新服务优先拿回同一个端口
+        expected_port = old_port
+        candidates = _pids_on_port(old_port)
+        if old_pid is None:
+            # 端口文件里没有 pid（老版本写的 / 被手改过）→ 无法确认归属 → 不杀
+            notes.append(_t("upgrade_serve_no_owner"))
+        else:
+            stopped = False
+            for pid in candidates:
+                if int(pid) != int(old_pid):
+                    # 这个端口上的监听进程不是我们的 serve → 不碰它
+                    continue
+                if _kill_pid(pid):
+                    stopped = True
+            if stopped:
+                notes.append(_t("upgrade_serve_stopped", port=old_port))
+    if _is_frozen():
+        cmd = [
+            sys.executable, "serve", "--root", str(root),
+            "--port", str(expected_port),
+        ]
+    else:
+        cmd = [
+            sys.executable, "-m", "pandaone", "serve", "--root", str(root),
+            "--port", str(expected_port),
+        ]
     kwargs = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = (
@@ -306,23 +379,30 @@ def _restart_serve(root: Path) -> tuple[bool, str]:
         )
     else:
         kwargs["start_new_session"] = True
+    # 删掉旧端口文件 —— 这样"文件重新出现"必然是**新**服务写的，
+    # 不会把旧文件里的端口误当成新服务的端口。
+    _clear_serve_port_file(root)
     try:
         subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kwargs
         )
     except Exception as e:
         return False, _t("upgrade_serve_fail", err=str(e))
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(25):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        info = _read_serve_port(root)
+        if info is not None:
+            actual_host = info.get("host") or "127.0.0.1"
+            actual_port = int(info["port"])
+            if _port_open(actual_host, actual_port):
+                notes.append(_t(
+                    "upgrade_serve_ok", url=f"http://{actual_host}:{actual_port}"
+                ))
+                return True, " ".join(notes)
         time.sleep(0.4)
-        try:
-            import socket
-
-            with socket.create_connection(("127.0.0.1", port), timeout=0.4):
-                return True, _t("upgrade_serve_ok", url=url)
-        except OSError:
-            continue
-    return True, _t("upgrade_serve_ok", url=url)
+    # 超时：实际端口未知 —— **不给**编造的 URL
+    notes.append(_t("upgrade_serve_pending"))
+    return True, " ".join(notes)
 
 
 def handler(args) -> int:
