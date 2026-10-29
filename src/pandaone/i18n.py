@@ -94,6 +94,7 @@ TRANSLATIONS = {
         "setup_context_skip_platform": "非 Windows 平台，跳过右键菜单注册",
         "setup_serve": "仪表盘: {url}",
         "setup_serve_fail": "仪表盘启动失败: {err}",
+        "setup_serve_pending": "仪表盘启动中，实际端口尚未就绪（稍后重试）",
         "setup_doctor": "体检完成 (exit={rc})",
         "setup_doctor_failed": "体检完成 (exit={rc})，以下防护层未通过: {layers}",
         "setup_summary": "部署摘要:",
@@ -145,6 +146,10 @@ TRANSLATIONS = {
         "upgrade_watch_start_fail": "看门狗启动失败: {err}",
         "upgrade_serve_ok": "仪表盘: {url}",
         "upgrade_serve_fail": "仪表盘重启失败: {err}",
+        "upgrade_serve_no_port": "未找到旧服务端口（.pandaone/serve_port.txt），未执行清理",
+        "upgrade_serve_no_owner": "旧服务端口文件缺少进程标识，无法确认归属，未执行清理",
+        "upgrade_serve_stopped": "已停止旧仪表盘（端口 {port}）",
+        "upgrade_serve_pending": "仪表盘重启中，实际端口尚未就绪（稍后重试）",
         "upgrade_done": "升级完成。",
 
         # ============ v0.7.23: backup（建议 1.4，纯本地）============
@@ -299,6 +304,7 @@ TRANSLATIONS = {
         # ============ serve (Web 仪表盘) ============
         "serve_ok_url": "[OK] Pandaone 仪表盘启动: {url}",
         "serve_port_shifted": "[WARN] 端口 {requested} 已被占用，已顺延到 {actual}",
+        "serve_port_file_fail": "无法写入端口文件: {err}",
         "serve_info_root": "  项目根: {root}",
         "serve_info_watch": "  监视文件: {path}",
         "serve_info_watchdog": "  watchdog: {state}",
@@ -606,6 +612,7 @@ TRANSLATIONS = {
         "setup_context_skip_platform": "not Windows, skipping context menu",
         "setup_serve": "Dashboard: {url}",
         "setup_serve_fail": "failed to start dashboard: {err}",
+        "setup_serve_pending": "dashboard starting, actual port not ready yet (retry later)",
         "setup_doctor": "health check done (exit={rc})",
         "setup_doctor_failed": "health check done (exit={rc}), failed layers: {layers}",
         "setup_summary": "Setup summary:",
@@ -657,6 +664,10 @@ TRANSLATIONS = {
         "upgrade_watch_start_fail": "failed to start watchdog: {err}",
         "upgrade_serve_ok": "Dashboard: {url}",
         "upgrade_serve_fail": "failed to restart dashboard: {err}",
+        "upgrade_serve_no_port": "old dashboard port not found (.pandaone/serve_port.txt); nothing was killed",
+        "upgrade_serve_no_owner": "old port file has no pid, cannot verify ownership; nothing was killed",
+        "upgrade_serve_stopped": "stopped old dashboard (port {port})",
+        "upgrade_serve_pending": "dashboard restarting, actual port not ready yet (retry later)",
         "upgrade_done": "Upgrade complete.",
 
         # ============ v0.7.23: backup (local only) ============
@@ -810,6 +821,7 @@ TRANSLATIONS = {
         # ============ serve (Web dashboard) ============
         "serve_ok_url": "[OK] Pandaone dashboard started: {url}",
         "serve_port_shifted": "[WARN] port {requested} was busy, shifted to {actual}",
+        "serve_port_file_fail": "failed to write serve port file: {err}",
         "serve_info_root": "  Project root: {root}",
         "serve_info_watch": "  Watching file: {path}",
         "serve_info_watchdog": "  watchdog: {state}",
