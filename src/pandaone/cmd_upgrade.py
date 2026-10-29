@@ -347,13 +347,13 @@ def _restart_serve(root: Path, timeout: float = 10.0) -> tuple[bool, str]:
         old_pid = old.get("pid")
         # 旧服务被停掉后端口应当空出来 → 新服务优先拿回同一个端口
         expected_port = old_port
-        candidates = _pids_on_port(old_port)
         if old_pid is None:
             # 端口文件里没有 pid（老版本写的 / 被手改过）→ 无法确认归属 → 不杀
+            # （这里连 _pids_on_port 都不用调 —— 结果用不上，省一次 netstat）
             notes.append(_t("upgrade_serve_no_owner"))
         else:
             stopped = False
-            for pid in candidates:
+            for pid in _pids_on_port(old_port):
                 if int(pid) != int(old_pid):
                     # 这个端口上的监听进程不是我们的 serve → 不碰它
                     continue
