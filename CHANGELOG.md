@@ -1,7 +1,3 @@
-# Changelog
-
-All notable changes to Pandaone AI Agent will be documented in this file.
-
 ## [0.7.34.1] - 2026-10-29
 
 **把 `doctor` 从「存在性体检」改造成「可执行性体检」，并修掉 Windows 上两个真实用户会踩的坑。**
@@ -108,6 +104,84 @@ URL 也不取 `server.server_address[1]`，于是 `start_server` 顺延后测试
 
 对已发布的 v0.7.33.0 **无用户影响**（该函数只被 frozen 分支调用，源码形态走 subprocess 分支），
 但它会让**新的 doctor L3 真检在源码形态下永远误红**。改为同时保留 `parent` 与 `parent.parent` 两个候选路径。
+
+### Fixed: `setup` / `upgrade` 用探测端口去启动和清理服务，会误杀无关进程
+
+**症状**：`pandaone setup` 启动后台看板后，有时要等满 12 秒才返回、给出的 URL 端口是错的；
+`pandaone upgrade` 重启看板时，可能**杀掉占用某个端口的无关程序**。
+
+**根因**：v0.7.34.0 把 `pandaone_serve.py` 的端口分配从"探测式"改成"原子占端口"（真 bind 成功才算占用，
+失败顺延到下一个），但 `cmd_setup.py` 与 `cmd_upgrade.py` 里**残留着旧的探测式调用**：
+
+```python
+port = _find_free_port()          # 探测式: bind 完立刻 close, 之后端口就还回去了
+...
+subprocess.Popen([..., "serve", "--root", str(root)])   # 注意: 没有传 --port
+...
+for pid in _pids_on_port(port):   # upgrade: 按**探测**端口杀进程
+    _kill_pid(pid)
+```
+
+三个问题叠在一起：
+1. **启动 serve 时根本没传 `--port`** —— serve 用自己的默认端口 8765，而调用方却去轮询/清理
+   `_find_free_port()` 探测出的**另一个**端口，两者根本不是同一个。
+2. **探测与真正 bind 之间存在 TOCTOU 窗口** —— 这正是 v0.7.34.0 已在 `start_server` 里消除掉的模式。
+3. **upgrade 按探测端口杀进程** —— 若该端口恰好被用户的无关程序占用，就会杀掉那个无关程序。
+
+**修法**：让 serve 把**实际绑定到的端口**落盘，调用方只认这个真值：
+
+- `src/pandaone/pandaone_serve.py`：新增 `<root>/.pandaone/serve_port.txt`，内容为带版本号的 JSON
+  （`{"version":1,"host":"127.0.0.1","port":8765,"pid":12345}`）。写失败**不影响 serve 正常启动**；
+  正常退出时按 pid 删除自己的记录（同机多实例互不误删）。
+- `cmd_setup.py::_step_serve`：删掉 `_find_free_port()`，改为显式传 `--port`，然后等
+  "端口文件出现 **且** 该端口可连"，用**实际**端口拼 URL；超时不再编造端口。
+- `cmd_upgrade.py::_restart_serve`：**先读端口文件**拿到上次实际运行的端口来定位旧服务，
+  **只有监听进程的 pid 与文件记录的 pid 一致才 kill**；读不到文件时**一个进程都不杀**，
+  并在返回消息里说明"未找到旧服务端口，未执行清理"。
+
+**新增回归测试** `tests/test_serve_port_coordination.py`（16 条，真实起 server，不 mock），
+含"无端口文件时零杀进程""不杀 pid 对不上的进程"以及 AST 级锁死
+"`_find_free_port` 不再被 setup/upgrade 引用"。
+
+### Fixed: 5 个 `.ps1` 入库时绕过了 `.gitattributes`，行尾与仓库声明长期冲突
+
+`.gitattributes` 声明 `*.ps1 text eol=lf`，但这 5 个脚本入库时绕过了该 filter，仓库里存的是 CRLF：
+
+```
+scripts/install-update-latest.ps1
+scripts/install-update.ps1
+scripts/install.ps1
+src/pandaone/installer/windows/install_context_menu.ps1
+src/pandaone/installer/windows/test_registry.ps1
+```
+
+后果：git 每次比对工作区都要先把 CRLF 转成 LF 再与仓库里的 CRLF blob 比较，**结果永远不相等** ——
+`scripts/install-update-latest.ps1` 因此长期挂在 `git status` 里显示为已修改，diff 每次都是全文件 121 行增删噪音；
+其余 4 个只是 mtime 尚未触发重新比对，一旦被 touch 同样会报脏。
+
+**修法**：用 `git add --renormalize` 对这 5 个精确路径重新规范化入库，使仓库内 blob 与 `.gitattributes` 声明一致。
+改动**纯粹是行尾符，语义零变化** —— 逐文件验证 HEAD 版本与暂存版本在 CRLF 归一后逐字节相等。
+
+### 安装器 opt-out 取舍：实测结论（`UsePreviousTasks=no`）
+
+v0.7.34.1 为修"静默安装不更新 IDE 的 MCP 配置"引入了 `UsePreviousTasks=no`。
+这会**覆盖用户此前对 installmcp 任务的显式取消**。为此专门构造了最小 Inno Setup 6 实验
+（两个任务分别模拟 `installmcp` 与 `addtopath`，`[Run]` 条目带 `Tasks:` 以观测是否真的执行），
+实测两个配置的对照结果：
+
+| 配置 | 首次安装（用户取消勾选） | 升级静默安装 | install-mcp 会执行吗 |
+|---|---|---|---|
+| `UsePreviousTasks=no` | `UNCHECKED` | **`CHECKED`** | ✅ 会 |
+| `UsePreviousTasks=yes`（Inno 默认） | `UNCHECKED` | `UNCHECKED` | ❌ **不会** |
+
+**结论：`UsePreviousTasks=no` 是让静默安装真正执行 install-mcp 的必要条件，没有两全方案。**
+保留默认的 `yes` 则升级时 install-mcp 依旧被跳过，R1 修复等于没做。
+
+**同时发现它还顺手修好了一个老问题**：用 `yes` 时，升级后 `addtopath`（`Flags: checkedonce`）
+会变成 `UNCHECKED` —— **PATH 前置在升级时根本不执行**；改用 `no` 后 `addtopath` 保持勾选，PATH 照常更新。
+
+**给用户的知情权**：升级后 IDE 的 MCP 配置会被重新写入（只改 `mcpServers.pandaone`，写前备份）。
+若希望保持"不注册 MCP"，请在升级后的安装界面重新取消勾选该任务，或使用非静默安装。
 
 ### 升级指引
 
