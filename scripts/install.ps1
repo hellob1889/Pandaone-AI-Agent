@@ -1,4 +1,4 @@
-# install.ps1 - Pandaone AI Agent one-shot installer (Windows)
+﻿# install.ps1 - Pandaone AI Agent one-shot installer (Windows)
 # ====================================================
 # Adversarial review: ensures the environment is ready
 # right after the user clones the repo.

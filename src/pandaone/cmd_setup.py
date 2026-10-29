@@ -54,6 +54,13 @@ def _t(key: str, **kw) -> str:
         return key
 
 
+#: setup 启动仪表盘时的**期望**端口。
+#: 注意：serve 的端口被占时会**原子顺延**到下一个可用端口，
+#: 所以"期望端口"未必等于"实际端口" —— 实际端口以
+#: `<root>/.pandaone/serve_port.txt` 为准（唯一真值来源）。
+SERVE_EXPECTED_PORT = 8765
+
+
 def _python_version() -> tuple[int, int]:
     return sys.version_info[0], sys.version_info[1]
 
@@ -386,23 +393,63 @@ def _is_frozen() -> bool:
     return bool(getattr(sys, "_MEIPASS", None))
 
 
-def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
-    """后台启动仪表盘并打印本地访问地址。"""
-    host = "127.0.0.1"
-    try:
-        from pandaone.pandaone_serve import _find_free_port
+def _read_serve_port(root: Path):
+    """读回 serve **实际**端口（None = 还没起来 / 读不到）。
 
-        port = _find_free_port()
+    端口文件由 serve 侧写入（见 pandaone_serve.write_serve_port）。
+    """
+    try:
+        from pandaone.pandaone_serve import read_serve_port
     except Exception:
-        port = 8765
+        return None
+    try:
+        return read_serve_port(root)
+    except Exception:
+        return None
+
+
+def _clear_serve_port_file(root: Path) -> None:
+    """删掉**上一次**残留的端口文件（启动新 serve 前调用）。"""
+    try:
+        from pandaone.pandaone_serve import clear_serve_port
+    except Exception:
+        return
+    try:
+        clear_serve_port(root)
+    except Exception:
+        pass
+
+
+def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
+    """后台启动仪表盘并打印本地访问地址。
+
+    v0.7.34.1：**不再**用探测式的 `_find_free_port()` 决定端口。
+      旧实现有三个硬伤：
+        1. 启动 serve 时**没有传 --port** —— serve 用自己的默认端口，
+           和这里轮询的探测端口**根本不是同一个**；
+        2. 探测（bind 完立刻 close）和真正 bind 之间有 TOCTOU 窗口；
+        3. 期望端口被占时 serve 会**原子顺延**，旧实现还在死等期望端口
+           → 12 秒空等 → 返回一个打不开的 URL。
+      现在：启动时显式传 `--port`（期望端口），serve 起来后把**实际**端口写进
+      `<root>/.pandaone/serve_port.txt`；这里等该文件出现且端口可连，
+      再用**实际**端口拼 URL。
+    """
+    host = "127.0.0.1"
+    expected_port = SERVE_EXPECTED_PORT
     # v0.7.29.0: 形态感知 —— 与 cmd_upgrade._restart_serve 同一个坑。
     #   frozen 形态下 sys.executable 就是 pandaone.exe 本身，
     #   `pandaone.exe -m pandaone serve` 会被当成子命令 -> "invalid choice: '-m'"。
     #   （v0.7.26.0 只在 upgrade 里修了，setup 这条路漏了，一直没被发现。）
     if _is_frozen():
-        cmd = [sys.executable, "serve", "--root", str(root)]
+        cmd = [
+            sys.executable, "serve", "--root", str(root),
+            "--port", str(expected_port),
+        ]
     else:
-        cmd = [sys.executable, "-m", "pandaone", "serve", "--root", str(root)]
+        cmd = [
+            sys.executable, "-m", "pandaone", "serve", "--root", str(root),
+            "--port", str(expected_port),
+        ]
     kwargs = {}
     if sys.platform.startswith("win"):
         kwargs["creationflags"] = (
@@ -411,6 +458,9 @@ def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
         )
     else:
         kwargs["start_new_session"] = True
+    # 先删掉**上一次**残留的端口文件 —— 否则可能把旧服务的端口当成新服务的，
+    # 报一个"已就绪"但实际根本没起起来的假 URL。
+    _clear_serve_port_file(root)
     try:
         subprocess.Popen(
             cmd,
@@ -422,10 +472,17 @@ def _step_serve(root: Path, timeout: float = 12.0) -> tuple[str, str]:
         return "warn", _t("setup_serve_fail", err=str(e))
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _port_open(host, port):
-            return "ok", _t("setup_serve", url=f"http://{host}:{port}")
+        info = _read_serve_port(root)
+        if info is not None:
+            actual_host = info.get("host") or host
+            actual_port = int(info["port"])
+            if _port_open(actual_host, actual_port):
+                return "ok", _t(
+                    "setup_serve", url=f"http://{actual_host}:{actual_port}"
+                )
         time.sleep(0.4)
-    return "warn", _t("setup_serve", url=f"http://{host}:{port}（启动中，稍后再试）")
+    # 超时：**不给**一个编造的端口 —— 实际端口未知就是未知。
+    return "warn", _t("setup_serve_pending")
 
 
 def _step_doctor(root: Path) -> tuple[str, str]:
