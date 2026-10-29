@@ -1,6 +1,131 @@
-# Changelog
+## [0.7.34.2] - 2026-10-30
 
-All notable changes to Pandaone AI Agent will be documented in this file.
+**修两个用户可见的真实故障：Windows PowerShell 5.1 下右键菜单脚本根本跑不起来；`setup`/`upgrade` 用探测端口去启动和清理服务，可能误杀无关进程。**
+
+### Fixed: PowerShell 5.1 下右键菜单安装脚本直接报语法错误
+
+**症状**：用户按 `docs/zh/context-menu.md` 给的命令执行，脚本**根本跑不起来**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\windows\install_context_menu.ps1 [-Force] [-DryRun]
+```
+
+**根因**：Windows PowerShell 5.1 **默认按 ANSI(GBK) 读取无 BOM 文件**。
+仓库里的 `.ps1` 是 UTF-8 无 BOM 且含大量中文，5.1 按 GBK 误解码后**解析器直接失败**
+（不是显示乱码，是脚本跑不起来）。
+
+用两种读法分别解析，可区分「5.1 专属故障」与「真实语法错误」：
+
+| 脚本 | 中文字符 | 5.1 默认读法 | 显式 UTF-8 读入 | 判定 |
+|---|---|---|---|---|
+| `install.ps1` | 464 | 0 | 0 | OK |
+| `scripts/install-update-latest.ps1` | 120 | 0 | 0 | OK |
+| `scripts/install.ps1` | 26 | 0 | 0 | OK |
+| `scripts/install-update.ps1` | 26 | 1 | 1 | 真实语法错误 |
+| `install_context_menu.ps1` | 618 | **9** | 0 | **5.1 专属** |
+| `test_registry.ps1` | 101 | 2 | 2 | 真实语法错误 |
+| `uninstall_context_menu.ps1` | 144 | **3** | 0 | **5.1 专属** |
+
+另外两个「真实语法错误」经查证是**文件创建时就被截断**（尾部停在 `Write-Host `）——
+`git show 251344d:scripts/install-update.ps1` = 743 字节 / 16 行、
+`git show c8105ec:...test_registry.ps1` = 1198 字节 / 32 行。已按各自文件头声明的流程与断言范围补全。
+
+**修法：按「消费方式」二分**，而不是无差别加 BOM：
+
+| 消费方式 | 脚本 | 处理 |
+|---|---|---|
+| `powershell -File` | `install_context_menu.ps1` / `uninstall_context_menu.ps1` / `scripts/install.ps1` / `test_registry.ps1` | **加 UTF-8 BOM**（内容零改动） |
+| `irm <url> \| iex` | `install.ps1` / `install-update-latest.ps1` / `install-update.ps1` | **禁止**加 BOM |
+
+**为什么 `irm|iex` 不能有 BOM**（实测，非推理）：`irm` 走 HTTP，返回原始字节流，
+`iex` 会把 U+FEFF 粘到第一个命令名上：
+
+```
+带 BOM: irm | iex -> CommandNotFoundException: "???Write-Host"
+无 BOM: irm | iex -> 正常输出
+```
+
+（本地用 `Get-Content` 复现不出来 —— 文件 API 会自动剥 BOM，只有 HTTP 路径会暴露。）
+
+**顺带修好的**：加了 BOM 后，脚本的中文输出也恢复正常（此前是 `瀹屽叏鍗歌浇` 这类乱码）。
+
+### Fixed: `setup` / `upgrade` 用探测端口去启动和清理服务
+
+**症状**：
+- `pandaone setup` 启动后台看板后，有时等满 12 秒才返回，给出的 URL 端口是错的
+- `pandaone upgrade` 重启看板时，可能**杀掉占用某端口的无关程序**
+
+**根因**：v0.7.34.0 把 `pandaone_serve.py` 的端口分配从「探测式」改成「原子占端口」
+（真 bind 成功才算占用，失败顺延到下一个），但 `cmd_setup.py` / `cmd_upgrade.py` 里**残留旧的探测式调用**：
+
+```python
+port = _find_free_port()                                  # 探测式: bind 完立刻 close
+subprocess.Popen([..., "serve", "--root", str(root)])     # 注意: 没有传 --port
+for pid in _pids_on_port(port): _kill_pid(pid)            # upgrade: 按探测端口杀进程
+```
+
+三个问题叠加：
+1. **启动 serve 时根本没传 `--port`** —— serve 用自己的默认端口 8765，
+   而调用方却去轮询/清理 `_find_free_port()` 探测出的**另一个**端口，两者根本不是同一个
+2. **探测与真 bind 之间存在 TOCTOU 窗口**（v0.7.34.0 已在 `start_server` 里消除的模式）
+3. **upgrade 按探测端口 kill 进程** —— 该端口若被用户的无关程序占用，就会杀掉那个程序
+
+**修法**：serve 把**实际绑定到的端口**落盘，调用方只认这个真值。
+
+- `src/pandaone/pandaone_serve.py`：新增 `<root>/.pandaone/serve_port.txt`，带版本号的 JSON
+  （`{"version":1,"host":"127.0.0.1","port":8765,"pid":12345}`）。
+  写失败**不影响 serve 正常启动**；正常退出时按 pid 删除自己的记录（同机多实例互不误删）。
+- `cmd_setup.py::_step_serve`：删掉 `_find_free_port()`，改为显式传 `--port`，
+  然后等「端口文件出现 **且** 该端口可连」，用**实际**端口拼 URL；超时不再编造端口。
+- `cmd_upgrade.py::_restart_serve`：**先读端口文件**拿到上次实际运行的端口来定位旧服务，
+  **只有监听进程的 pid 与文件记录的 pid 一致才 kill**；读不到文件时**一个进程都不杀**，
+  并在返回消息里说明「未找到旧服务端口，未执行清理」。
+
+### Fixed: 5 个 `.ps1` 入库时绕过了 `.gitattributes`，行尾与仓库声明长期冲突
+
+`.gitattributes` 声明 `*.ps1 text eol=lf`，但这 5 个脚本入库时绕过了该 filter，仓库里存的是 CRLF：
+
+```
+scripts/install-update-latest.ps1
+scripts/install-update.ps1
+scripts/install.ps1
+src/pandaone/installer/windows/install_context_menu.ps1
+src/pandaone/installer/windows/test_registry.ps1
+```
+
+git 每次比对工作区都要先把 CRLF 转成 LF 再与仓库里的 CRLF blob 比较，**结果永远不相等** ——
+`scripts/install-update-latest.ps1` 因此长期挂在 `git status` 里显示为已修改，
+diff 每次都是全文件 121 行增删噪音；其余 4 个只是 mtime 尚未触发重新比对，一旦被 touch 同样会报脏。
+
+用 `git add --renormalize` 规范化入库，**改动纯粹是行尾符，语义零变化**
+（逐文件验证 HEAD 版本与暂存版本在 CRLF 归一后逐字节相等）。
+
+### 新增：PowerShell 5.1 兼容性门禁
+
+新增 `tests/test_ps1_powershell51_compat.py`（4 用例），防止同类故障复发：
+
+1. 所有 `.ps1` 的 **5.1 错误数 == 显式 UTF-8 错误数**（抓 5.1 专属故障）
+2. 所有 `.ps1` 的 **显式 UTF-8 错误数 == 0**（抓真实语法错误 —— 这条是必要的：
+   截断文件两侧错误数相同，只靠第 1 条抓不到）
+3. BOM 策略符合消费方式二分
+4. `irm|iex` 脚本白名单仍然准确（防白名单腐化）
+
+**门禁有效性已实证**（不是"测试通过就算数"）：人为去掉 BOM → 2 failed；
+注入语法损坏 → 1 failed；还原 → 4 passed。
+
+Linux CI 自动 skip —— 本机无 `powershell.exe`，无法复现 ANSI/GBK 读取行为。
+
+### 验证
+
+| 检查 | 结果 |
+|---|---|
+| 全量套件 | **632 passed, 9 skipped** |
+| i18n 审计 | zh-CN / en 均 432/432 (100%) |
+| 所有 `.ps1` 在 5.1 下 | 7/7 **err51=0, errU8=0** |
+| 门禁有效性 | 注入 BOM 缺失 → 2 failed；注入语法损坏 → 1 failed；还原 → 4 passed |
+| 真机 `install_context_menu.ps1 -DryRun -Force` | exit 0，中文正确，**注册表 BEFORE 30 keys → AFTER 30 keys identical=True** |
+| 真机 install → test_registry 端到端 | exit 0，**33 条断言全过**，注册表逐字节还原 |
+| `irm\|iex` + BOM | 实测 `CommandNotFoundException`（确认 BOM 必须按消费方式二分） |
 
 ## [0.7.34.1] - 2026-10-29
 
@@ -108,6 +233,84 @@ URL 也不取 `server.server_address[1]`，于是 `start_server` 顺延后测试
 
 对已发布的 v0.7.33.0 **无用户影响**（该函数只被 frozen 分支调用，源码形态走 subprocess 分支），
 但它会让**新的 doctor L3 真检在源码形态下永远误红**。改为同时保留 `parent` 与 `parent.parent` 两个候选路径。
+
+### Fixed: `setup` / `upgrade` 用探测端口去启动和清理服务，会误杀无关进程
+
+**症状**：`pandaone setup` 启动后台看板后，有时要等满 12 秒才返回、给出的 URL 端口是错的；
+`pandaone upgrade` 重启看板时，可能**杀掉占用某个端口的无关程序**。
+
+**根因**：v0.7.34.0 把 `pandaone_serve.py` 的端口分配从"探测式"改成"原子占端口"（真 bind 成功才算占用，
+失败顺延到下一个），但 `cmd_setup.py` 与 `cmd_upgrade.py` 里**残留着旧的探测式调用**：
+
+```python
+port = _find_free_port()          # 探测式: bind 完立刻 close, 之后端口就还回去了
+...
+subprocess.Popen([..., "serve", "--root", str(root)])   # 注意: 没有传 --port
+...
+for pid in _pids_on_port(port):   # upgrade: 按**探测**端口杀进程
+    _kill_pid(pid)
+```
+
+三个问题叠在一起：
+1. **启动 serve 时根本没传 `--port`** —— serve 用自己的默认端口 8765，而调用方却去轮询/清理
+   `_find_free_port()` 探测出的**另一个**端口，两者根本不是同一个。
+2. **探测与真正 bind 之间存在 TOCTOU 窗口** —— 这正是 v0.7.34.0 已在 `start_server` 里消除掉的模式。
+3. **upgrade 按探测端口杀进程** —— 若该端口恰好被用户的无关程序占用，就会杀掉那个无关程序。
+
+**修法**：让 serve 把**实际绑定到的端口**落盘，调用方只认这个真值：
+
+- `src/pandaone/pandaone_serve.py`：新增 `<root>/.pandaone/serve_port.txt`，内容为带版本号的 JSON
+  （`{"version":1,"host":"127.0.0.1","port":8765,"pid":12345}`）。写失败**不影响 serve 正常启动**；
+  正常退出时按 pid 删除自己的记录（同机多实例互不误删）。
+- `cmd_setup.py::_step_serve`：删掉 `_find_free_port()`，改为显式传 `--port`，然后等
+  "端口文件出现 **且** 该端口可连"，用**实际**端口拼 URL；超时不再编造端口。
+- `cmd_upgrade.py::_restart_serve`：**先读端口文件**拿到上次实际运行的端口来定位旧服务，
+  **只有监听进程的 pid 与文件记录的 pid 一致才 kill**；读不到文件时**一个进程都不杀**，
+  并在返回消息里说明"未找到旧服务端口，未执行清理"。
+
+**新增回归测试** `tests/test_serve_port_coordination.py`（16 条，真实起 server，不 mock），
+含"无端口文件时零杀进程""不杀 pid 对不上的进程"以及 AST 级锁死
+"`_find_free_port` 不再被 setup/upgrade 引用"。
+
+### Fixed: 5 个 `.ps1` 入库时绕过了 `.gitattributes`，行尾与仓库声明长期冲突
+
+`.gitattributes` 声明 `*.ps1 text eol=lf`，但这 5 个脚本入库时绕过了该 filter，仓库里存的是 CRLF：
+
+```
+scripts/install-update-latest.ps1
+scripts/install-update.ps1
+scripts/install.ps1
+src/pandaone/installer/windows/install_context_menu.ps1
+src/pandaone/installer/windows/test_registry.ps1
+```
+
+后果：git 每次比对工作区都要先把 CRLF 转成 LF 再与仓库里的 CRLF blob 比较，**结果永远不相等** ——
+`scripts/install-update-latest.ps1` 因此长期挂在 `git status` 里显示为已修改，diff 每次都是全文件 121 行增删噪音；
+其余 4 个只是 mtime 尚未触发重新比对，一旦被 touch 同样会报脏。
+
+**修法**：用 `git add --renormalize` 对这 5 个精确路径重新规范化入库，使仓库内 blob 与 `.gitattributes` 声明一致。
+改动**纯粹是行尾符，语义零变化** —— 逐文件验证 HEAD 版本与暂存版本在 CRLF 归一后逐字节相等。
+
+### 安装器 opt-out 取舍：实测结论（`UsePreviousTasks=no`）
+
+v0.7.34.1 为修"静默安装不更新 IDE 的 MCP 配置"引入了 `UsePreviousTasks=no`。
+这会**覆盖用户此前对 installmcp 任务的显式取消**。为此专门构造了最小 Inno Setup 6 实验
+（两个任务分别模拟 `installmcp` 与 `addtopath`，`[Run]` 条目带 `Tasks:` 以观测是否真的执行），
+实测两个配置的对照结果：
+
+| 配置 | 首次安装（用户取消勾选） | 升级静默安装 | install-mcp 会执行吗 |
+|---|---|---|---|
+| `UsePreviousTasks=no` | `UNCHECKED` | **`CHECKED`** | ✅ 会 |
+| `UsePreviousTasks=yes`（Inno 默认） | `UNCHECKED` | `UNCHECKED` | ❌ **不会** |
+
+**结论：`UsePreviousTasks=no` 是让静默安装真正执行 install-mcp 的必要条件，没有两全方案。**
+保留默认的 `yes` 则升级时 install-mcp 依旧被跳过，R1 修复等于没做。
+
+**同时发现它还顺手修好了一个老问题**：用 `yes` 时，升级后 `addtopath`（`Flags: checkedonce`）
+会变成 `UNCHECKED` —— **PATH 前置在升级时根本不执行**；改用 `no` 后 `addtopath` 保持勾选，PATH 照常更新。
+
+**给用户的知情权**：升级后 IDE 的 MCP 配置会被重新写入（只改 `mcpServers.pandaone`，写前备份）。
+若希望保持"不注册 MCP"，请在升级后的安装界面重新取消勾选该任务，或使用非静默安装。
 
 ### 升级指引
 
