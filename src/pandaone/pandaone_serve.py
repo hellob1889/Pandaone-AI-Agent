@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import queue
 import socket
 import sys
@@ -427,6 +428,138 @@ def _find_free_port(start: int = 8765, max_tries: int = 20) -> int:
     raise RuntimeError(f"No free port found in [{start}, {start + max_tries})")
 
 
+# ============================================================
+# 端口文件：serve **实际**端口的唯一真值来源
+# ============================================================
+#
+# 为什么需要（v0.7.34.1 修的真实缺陷）
+# --------------------------------------
+# setup / upgrade 之前都用 `_find_free_port()` **探测**一个端口，然后：
+#   - setup:   轮询这个探测端口、URL 也用它
+#              → 但 serve 实际监听的是**另一个**端口（serve 有自己的默认端口，
+#                被占时还会**原子顺延**）→ 12 秒空等 + 返回一个打不开的 URL
+#   - upgrade: 按探测端口 `_pids_on_port()` → `_kill_pid()`
+#              → 探测到的端口完全可能是**别的无关程序**在用 → 杀掉无关进程
+#
+# 现在：serve 启动后把**实际**绑定到的端口写进 `<root>/.pandaone/serve_port.txt`，
+#      setup / upgrade 只认这个文件里的端口（真值）。
+#
+# 文件格式（JSON，一行，带版本标记）
+# ---------------------------------
+#   {"host": "127.0.0.1", "pid": 12345, "port": 8765, "version": 1}
+#
+#   - version: 格式版本号。格式不兼容变更时 +1；解析方只认自己认识的版本，
+#              认不出来一律当作"没有端口信息"（宁可不知道，也不能给一个错的端口）。
+#   - host:    实际绑定地址（拼完整 URL 用）
+#   - port:    **实际**监听端口（server.server_address[1]）
+#   - pid:     写这个文件的 serve 进程 pid —— 用来确认"这个端口上的监听进程
+#              到底是不是我们自己的"，避免 upgrade 误杀无关进程。
+
+#: 端口文件名（相对 `<root>/.pandaone/`）
+SERVE_PORT_FILENAME = "serve_port.txt"
+
+#: 端口文件格式版本
+SERVE_PORT_FILE_VERSION = 1
+
+
+def serve_port_path(root: Path | str) -> Path:
+    """端口文件路径：`<root>/.pandaone/serve_port.txt`。"""
+    return Path(root).resolve() / ".pandaone" / SERVE_PORT_FILENAME
+
+
+def write_serve_port(root: Path | str, host: str, port: int,
+                     pid: int | None = None) -> bool:
+    """把 serve **实际**监听的端口写进端口文件（覆盖旧文件）。
+
+    写失败（.pandaone 不可写 / 磁盘满等）**绝不影响 serve 正常启动** ——
+    只在 stderr 记一条警告并返回 False。
+    """
+    payload = {
+        "version": SERVE_PORT_FILE_VERSION,
+        "host": str(host),
+        "port": int(port),
+        "pid": int(pid) if pid else None,
+    }
+    try:
+        path = serve_port_path(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return True
+    except Exception as e:
+        print(_t("serve_port_file_fail", err=str(e)), file=sys.stderr)
+        return False
+
+
+def read_serve_port(root: Path | str) -> dict | None:
+    """读回 serve 实际端口。
+
+    Returns:
+        {"version", "host", "port", "pid"}；读不到 / 格式不认识 / 损坏 → None。
+    """
+    try:
+        raw = serve_port_path(root).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        version = int(data.get("version", 0))
+    except (TypeError, ValueError):
+        return None
+    if version != SERVE_PORT_FILE_VERSION:
+        # 格式不认识 —— 当作"没有端口信息"，绝不猜
+        return None
+    try:
+        port = int(data["port"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (0 < port < 65536):
+        return None
+    pid = data.get("pid")
+    try:
+        pid = int(pid) if pid is not None else None
+    except (TypeError, ValueError):
+        pid = None
+    return {
+        "version": version,
+        "host": str(data.get("host") or "127.0.0.1"),
+        "port": port,
+        "pid": pid,
+    }
+
+
+def clear_serve_port(root: Path | str, pid: int | None = None) -> bool:
+    """删除端口文件。
+
+    pid 不为 None 时**只删**记录着该 pid 的文件 —— 同机上可能有另一个 serve
+    实例写着自己的端口文件，不能连坐删除。
+
+    生命周期：
+      - serve 启动        → 写（覆盖旧文件）
+      - serve 正常退出(Ctrl+C) → 删（服务确实停了）
+      - serve 崩溃 / 被 taskkill /F 强杀 → **文件残留**
+        残留不会导致误杀：upgrade 只在"该端口上的监听进程 pid == 文件里记的
+        pid"时才 kill；旧进程已经死了 → pid 对不上 → 一个进程都不会杀。
+    """
+    path = serve_port_path(root)
+    try:
+        if pid is not None:
+            info = read_serve_port(root)
+            if info is None or info.get("pid") != int(pid):
+                return False
+        path.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def start_server(root: Path, port: int = 8765, host: str = "127.0.0.1",
                  open_browser: bool = True) -> ThreadingHTTPServer:
     """启动 pandaone 仪表盘服务器。
@@ -462,6 +595,12 @@ def start_server(root: Path, port: int = 8765, host: str = "127.0.0.1",
     #   却在别的端口上跑仪表盘，还以为没启动成功。这里明确告诉他顺延到了哪。
     if actual_port != port:
         print(_t("serve_port_shifted", requested=port, actual=actual_port))
+    # v0.7.34.1: 把**实际**端口落盘 —— serve 实际端口的唯一真值来源。
+    #   setup / upgrade 之前用 _find_free_port() **探测**一个端口再轮询/杀进程，
+    #   而 serve 实际监听的是**另一个**端口 → 轮询超时、URL 报错；
+    #   upgrade 还会按**探测**端口 kill 进程（可能杀掉无关程序）。
+    #   写失败（.pandaone 不可写等）**不影响 serve 正常启动**。
+    write_serve_port(root, host, actual_port, pid=os.getpid())
 
     # 启动 watchdog
     has_watchdog = monitor.start()
@@ -503,6 +642,10 @@ def run_blocking(root: Path, port: int = 8765) -> int:
         monitor.stop()
         server.shutdown()
         server.server_close()
+        # 正常退出(Ctrl+C)→ 服务确实停了 → 删掉端口文件。
+        #   只删**自己写的那份**(pid 匹配)—— 同机可能有另一个 serve 实例。
+        #   崩溃 / taskkill /F 走不到这里 → 文件残留（见 clear_serve_port 注释）。
+        clear_serve_port(root, pid=os.getpid())
         return 0
 
 
