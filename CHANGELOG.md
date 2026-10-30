@@ -1,3 +1,111 @@
+## [0.7.34.3] - 2026-10-31
+
+**让 PowerShell 与 CLI 两个入口装出**完全一致**的右键菜单，并修掉文档里一条"照抄必然失败"的命令。**
+
+### Fixed: `.ps1` 与 CLI 装出的右键菜单结构不一致
+
+v0.7.34.2 修好了脚本在 PowerShell 5.1 下跑不起来的问题后，暴露出下一层不一致：
+**Windows 右键菜单有两个安装入口**（`pandaone install-context` 与 `install_context_menu.ps1`），
+它们写出的注册表结构不同，导致用户用不同入口安装会得到**不同行为**。
+
+| | CLI（`pandaone install-context`） | `.ps1`（修复前） |
+|---|---|---|
+| 菜单显示名 | `MUIVerb` | `(Default)` = 空字符串 |
+| command | 不带 `--trust-default` | **带** `--trust-default` |
+| `Init` 的 `CommandFlags` | 不写 | `0x20`（ECF_SEPARATORBEFORE） |
+| `SubCommands` 残留 | 主动删除 | 未处理 |
+
+**最严重的是 `--trust-default`**：CLI 侧早在 v0.7.20 的 P0-3 就已判定并移除
+（注释原文：*"去掉 `--trust-default`，避免右键菜单静默触发 L5 自检失败"*）——
+因为它会让**一次右键点击就静默改写指纹安全基线**，直接违背"未审计改动应被拒绝"的设计意图。
+但 `.ps1` 侧一直保留着它，于是**用 `.ps1` 装菜单的用户仍在静默改写基线**。
+
+**修法**：以 CLI 为准（它是含 P0-3 修复的新版），把 `.ps1` 对齐过来：
+
+- 4 个 command 全部去掉 `--trust-default`
+- 删除 `Init` 的 `CommandFlags`（MS 文档：Creating Static Cascading Menus 中 `CommandFlags`
+  是 `EXPCMDFLAGS` 位掩码，`0x20` = `ECF_SEPARATORBEFORE`，**仅顶层菜单项生效**，
+  级联子菜单内无效）
+- 父键改用 `MUIVerb` 提供显示名，**不设** `(Default)`（MS 文档：Creating Shortcut Menu
+  要求 `(Default)` 为 "(value not set)"，即该值不存在；写空串是另一种状态，
+  Explorer 会把它当作"有标题的空条目"，导致右键菜单出现一个没有目标的空条）
+
+同时修正 `test_registry.ps1` 的断言清单：原来的断言是照着**旧 `.ps1` 结构**写的
+（断言 `CommandFlags` 必须等于 `0x20`、断言 `(Default)` 必须为空字符串），
+对 **CLI 装的菜单会失败**。现在改为断言**统一后的标准结构**
+（3 个入口 × 4 个 verb，含 `MUIVerb` / 无 `SubCommands` / 无 `--trust-default`）。
+
+**验证**：真机跑两种安装方式，`test_registry.ps1` **都绿**（修复前 CLI 装的会挂 3 条断言）：
+
+```
+方式 A: .ps1 安装 → test_registry exit=0
+方式 B: CLI 安装 → test_registry exit=0
+注册表还原校验: restored == original -> True (45 键值 → 45 键值)
+```
+
+### Fixed: 文档里的右键菜单脚本路径在三种安装方式下都不存在
+
+`docs/zh/context-menu.md` 与 `docs/en/context-menu.md` 给的命令是：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\windows\install_context_menu.ps1
+```
+
+**这个相对路径在任何一种安装方式下都不存在**：
+
+| 安装方式 | 实际路径 |
+|---|---|
+| pip (`pip install pandaone-guard`) | `<Python>\Lib\site-packages\pandaone\installer\windows\` |
+| Windows 安装包 (.exe) | `%LOCALAPPDATA%\Pandaone\_internal\pandaone\installer\windows\` |
+| 源码仓库 | `src\pandaone\installer\windows\` |
+
+仓库根的 `installer\` 是 Inno Setup 的**构建产物目录**（只含 `Output/` `staging/` `pandaone.iss`），
+不含这些脚本。用户照抄文档必然得到 "file does not exist"。
+
+**修法**：改为用一条命令动态定位（适配所有安装方式），并附三种方式的实际路径对照表：
+
+```powershell
+$p = python -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','windows','install_context_menu.ps1'))"
+powershell -ExecutionPolicy Bypass -File $p [-Force] [-DryRun]
+```
+
+macOS / Linux 的 `bash installer/macos/install_context_menu.sh` 同理改为动态定位；
+"文件清单"一节改为 `<pandaone 包目录>/installer/` 的真实结构。
+
+> 另：`实战验证报告_v0.7.14_右键菜单修复.md` 里让用户跑 `test_registry.cmd` —— **仓库里从来没有 .cmd 文件**
+> （`git ls-files` 的 .cmd 数量为 0），实际是 `.bat`。已改正。
+
+### Fixed: 两个被截断的 `.bat` 脚本
+
+`test_registry.bat` 与 `test_registry_real.bat` 都**自创建提交起就是截断的**
+（`git show <创建commit>:<path>` 证实：`test_registry.bat` = 203 字节 / 5 行，
+尾部停在 `call :check HKCU\...\Pandaone_test (Default)`）。
+
+- **`test_registry.bat`（sandbox 版）→ 删除**：它断言的沙箱注册表键 `Pandaone_test`
+  已被**无任何代码路径**创建（`install_context_menu.ps1` 没有沙箱模式，只有 `-DryRun` 不写表；
+  CLI 只安装 3 个真实 base key），所以它**永远不可能通过**，留着只会误导。
+- **`test_registry_real.bat` → 补全**：按其自身文件头声明的校验范围补全
+  （真实安装的 Pandaone 右键菜单注册表结构，8 条断言，含 `Icon`）。
+
+> 实测补全后在 cmd.exe 下真的通过：`[OK] all assertions passed`，exit=0。
+
+### 附带：`--trust-default` 的帮助文本澄清
+
+`part_001.py` 的 `--trust-default` 帮助文本原样抄了 v0.7.20 的措辞，容易让人以为
+"右键菜单用这个是安全的"。已改为明确说明：**会静默重写指纹基线**，
+并注明**右键菜单场景禁止使用**（引用 v0.7.20 P0-3）。
+
+### 验证
+
+| 检查 | 结果 |
+|---|---|
+| 全量套件 | **632 passed, 9 skipped** |
+| `test_registry.ps1` 对 `.ps1` 安装 | exit=0 **PASS** |
+| `test_registry.ps1` 对 CLI 安装 | exit=0 **PASS** |
+| 注册表还原 | `restored == original : True`（45 键值 → 45 键值） |
+| `test_registry_real.bat` 在 cmd.exe | `[OK] all assertions passed`，exit=0 |
+| 文档新命令实测 | 定位正确 → 文件存在 → DryRun exit=0 |
+
 ## [0.7.34.2] - 2026-10-30
 
 **修两个用户可见的真实故障：Windows PowerShell 5.1 下右键菜单脚本根本跑不起来；`setup`/`upgrade` 用探测端口去启动和清理服务，可能误杀无关进程。**
