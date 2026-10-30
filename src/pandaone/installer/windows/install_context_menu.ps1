@@ -16,16 +16,19 @@
 #   - 攻击：pandaone.exe 路径被替换
 #     缓解：用绝对路径 + fallback 搜索
 #   - 攻击：用户已有同名菜单项冲突
-#     缓解：用 MUIVerb + subCommands 注册到独立命名空间
+#     缓解：用 MUIVerb + ExtendedSubCommandsKey 注册到独立命名空间
 #
-# 注册表结构：
-#   HKCU\Software\Classes\*\shell\Pandaone            (任意文件)
-#       \shell\Init\shell\open\command              (pandaone init)
-#       \shell\Lock\shell\open\command              (pandaone lock)
-#       \shell\Status\shell\open\command            (pandaone status)
-#       \shell\Write\shell\open\command             (pandaone write --file)
-#   HKCU\Software\Classes\Directory\shell\Pandaone    (目录)
-#   HKCU\Software\Classes\Directory\Background\shell\Pandaone  (空白处)
+# 注册表结构（与 CLI src/pandaone/cli_chunks/part_006.py + Inno Setup
+# src/pandaone/installer/codeaudit.iss 完全一致 —— 三者是同一份标准结构）：
+#   HKCU\Software\Classes\<type>\shell\Pandaone      (父键 / 级联菜单)
+#       MUIVerb                 = "Pandaone 审计工具 / Audit Tools"
+#       Icon                    = "<pandaone.exe>",0
+#       ExtendedSubCommandsKey  = "Pandaone\Shell"
+#       \Shell\Init\command     (pandaone init)
+#       \Shell\Lock\command     (pandaone lock)
+#       \Shell\Status\command   (pandaone status)
+#       \Shell\Unlock\command   (pandaone unlock)
+#   <type> = *（任意文件） | Directory（目录） | Directory\Background（空白处）
 # ============================================================
 
 [CmdletBinding()]
@@ -172,36 +175,57 @@ function Install-CascadeMenu {
     $baseKey = "HKCU:\Software\Classes\$RootKey\Pandaone"
 
     # 主菜单（cascade = submenu，V2 ExtendedSubCommandsKey 模式）
-    Set-RegValue -Path $baseKey -Name '' -Type 'String' -Value ''
+    # v0.7.34.3: 本脚本此前落后于 CLI 两轮 P0 修复，用户用不同入口安装会得到
+    # 不同的注册表结构。现与 CLI (src/pandaone/cli_chunks/part_006.py) 和 Inno
+    # Setup (src/pandaone/installer/codeaudit.iss) 对齐 —— 三者是同一份标准结构。
+    #
+    # MUIVerb 提供显示名；(Default) 不设。MS 文档（Creating Shortcut Menu
+    # Handlers → Creating Static Cascading Menus）要求级联菜单父键的默认值显示为
+    # "(value not set)"，即该值不存在。写空串是另一种状态：Explorer 会把它当作
+    # 显示名 → 右键菜单里出现一个没有标题的空条目。
+    Set-RegValue -Path $baseKey -Name 'MUIVerb' -Type 'String' -Value 'Pandaone 审计工具 / Audit Tools'
     Set-RegValue -Path $baseKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
     Set-RegValue -Path $baseKey -Name 'ExtendedSubCommandsKey' -Type 'String' -Value 'Pandaone\Shell'
 
     $repo = "$baseKey\Shell"
 
+    # v0.7.20 P0-3 fix（随 v0.7.34.3 对齐 CLI）: command 去掉 --trust-default。
+    #   --trust-default 会让指纹自动刷新（见 part_006.py main() 的 trust_default
+    #   分支：check_fingerprint(silent=True) 失败后直接 _save_fp 重写指纹），等于
+    #   让一次右键点击就改写安全基线，违背"未审计改动应被拒绝"的设计意图；再叠加
+    #   --silent（不打印任何错误），用户完全看不到发生了什么。右键菜单是最容易被
+    #   无意触发的入口，绝不能静默关掉 L5 自校验。
+    #
+    # v0.7.34.3: 去掉 Init 的 CommandFlags。MS 文档（Creating Shortcut Menu
+    #   Handlers → Creating Static Cascading Menus）说明 CommandFlags 是
+    #   EXPCMDFLAGS 位掩码，0x20 = ECF_SEPARATORBEFORE（0x40 = ECF_SEPARATORAFTER），
+    #   用于在菜单项前/后画分隔线，且明确写明 "ECF_SEPARATORBEFORE works only for
+    #   the top level menu items"。本菜单的 4 个 verb 位于级联子菜单内部，不是
+    #   顶层菜单项 → 该标志不产生任何效果。CLI 与 Inno Setup 均不写此值。
+
     # 1) Init
     $initKey = "$repo\Init"
-    Set-RegValue -Path $initKey -Name '' -Type 'String' -Value '初始化 Pandaone (init)'
+    Set-RegValue -Path $initKey -Name '' -Type 'String' -Value 'Pandaone Init (init)'
     Set-RegValue -Path $initKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path $initKey -Name 'CommandFlags' -Type 'DWord' -Value 0x20
-    Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default init --root `"%V`""
+    Set-RegValue -Path "$initKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent init --root `"%V`""
 
     # 2) Lock
     $lockKey = "$repo\Lock"
-    Set-RegValue -Path $lockKey -Name '' -Type 'String' -Value '锁定文件 (lock)'
+    Set-RegValue -Path $lockKey -Name '' -Type 'String' -Value 'Pandaone Lock (lock)'
     Set-RegValue -Path $lockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path "$lockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default lock --root `"%V`""
+    Set-RegValue -Path "$lockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent lock --root `"%V`""
 
     # 3) Status
     $statusKey = "$repo\Status"
-    Set-RegValue -Path $statusKey -Name '' -Type 'String' -Value '查看状态 (status)'
+    Set-RegValue -Path $statusKey -Name '' -Type 'String' -Value 'Pandaone Status (status)'
     Set-RegValue -Path $statusKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path "$statusKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default status --root `"%V`""
+    Set-RegValue -Path "$statusKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent status --root `"%V`""
 
     # 4) Unlock
     $unlockKey = "$repo\Unlock"
-    Set-RegValue -Path $unlockKey -Name '' -Type 'String' -Value '解锁文件 (unlock)'
+    Set-RegValue -Path $unlockKey -Name '' -Type 'String' -Value 'Pandaone Unlock (unlock)'
     Set-RegValue -Path $unlockKey -Name 'Icon' -Type 'String' -Value "`"$PandaonePath`",0"
-    Set-RegValue -Path "$unlockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent --trust-default unlock --root `"%V`""
+    Set-RegValue -Path "$unlockKey\command" -Name '' -Type 'String' -Value "`"$PandaonePath`" --silent unlock --root `"%V`""
 }
 
 # ============================================================

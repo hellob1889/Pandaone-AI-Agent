@@ -219,7 +219,7 @@ def build_parser():
     parser.add_argument("--silent", action="store_true",
                         help="静默模式：跳过 banner 和 README 摘要（右键菜单调用建议带上）")
     parser.add_argument("--trust-default", action="store_true",
-                        help="使用默认密码 0000 自动更新/初始化指纹（右键菜单调用建议带上）")
+                        help="使用默认密码 0000 自动更新/初始化指纹（会静默重写指纹基线；右键菜单禁用，见 v0.7.20 P0-3）")
     # Phase 10: i18n 语言切换
     parser.add_argument("--lang", choices=["zh-CN", "en"], default=None,
                         help="界面语言：zh-CN（简体中文，默认）/ en（英文）。不指定则自动检测 OS 语言")

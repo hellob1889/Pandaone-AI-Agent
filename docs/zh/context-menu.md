@@ -28,10 +28,26 @@ pandaone uninstall-context
 手动运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\windows\install_context_menu.ps1 [-Force] [-DryRun]
+# 脚本随包分发，路径随安装方式不同，用 Python 定位最稳妥：
+$p = python -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','windows','install_context_menu.ps1'))"
+powershell -ExecutionPolicy Bypass -File $p [-Force] [-DryRun]
 ```
 
+脚本的实际位置：
+
+| 安装方式 | 路径 |
+|---|---|
+| pip (`pip install pandaone-guard`) | `<Python>\Lib\site-packages\pandaone\installer\windows\` |
+| Windows 安装包 (.exe) | `%LOCALAPPDATA%\Pandaone\_internal\pandaone\installer\windows\` |
+| 源码仓库 | `src\pandaone\installer\windows\` |
+
+> 注：直接写 `installer\windows\install_context_menu.ps1` **在以上三种情况下都不存在** ——
+> 仓库根的 `installer\` 是 Inno Setup 的构建产物目录，不含这些脚本。
+
 DryRun 仅打印计划不写注册表（用于测试）。
+
+> ⚠️ Windows PowerShell 5.1 用户请注意：脚本含中文，必须带 UTF-8 BOM 才能被 5.1 正确解析
+> （v0.7.34.2 起已随包分发带 BOM）。若你的脚本是旧版本自行拷贝的，请重新下载。
 
 ### macOS（Automator Quick Action）
 
@@ -42,7 +58,7 @@ DryRun 仅打印计划不写注册表（用于测试）。
 手动运行：
 
 ```bash
-bash installer/macos/install_context_menu.sh
+bash "$(python3 -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','macos','install_context_menu.sh'))")"
 ```
 
 ### Linux（Nautilus + Dolphin）
@@ -55,7 +71,7 @@ bash installer/macos/install_context_menu.sh
 手动运行：
 
 ```bash
-bash installer/linux/install_context_menu.sh
+bash "$(python3 -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','linux','install_context_menu.sh'))")"
 ```
 
 ## 工作流示例
@@ -68,8 +84,10 @@ bash installer/linux/install_context_menu.sh
 
 ## 文件清单
 
+脚本随 `pandaone` 包分发，位于包目录的 `installer/` 子目录下：
+
 ```
-installer/
+<pandaone 包目录>/installer/
 ├── windows/
 │   ├── install_context_menu.ps1       # PowerShell 安装（HKCU）
 │   └── uninstall_context_menu.ps1     # PowerShell 卸载
@@ -86,6 +104,9 @@ installer/
     ├── nautilus/Pandaone                # Nautilus 脚本
     └── dolphin/pandaone-lock.desktop    # KDE 服务菜单
 ```
+
+包目录的位置：pip 安装为 `<Python>\Lib\site-packages\pandaone\`，源码仓库为 `src\pandaone\`。
+可用 `python -c "import pandaone,os;print(os.path.dirname(pandaone.__file__))"` 直接打印。
 
 ## 第一性原理
 
