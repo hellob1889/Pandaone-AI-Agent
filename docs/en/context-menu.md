@@ -28,10 +28,28 @@ pandaone uninstall-context
 Manual run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\windows\install_context_menu.ps1 [-Force] [-DryRun]
+# The script ships with the package; its path depends on how you installed.
+# Locating it via Python is the most reliable way:
+$p = python -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','windows','install_context_menu.ps1'))"
+powershell -ExecutionPolicy Bypass -File $p [-Force] [-DryRun]
 ```
 
+Where the script actually lives:
+
+| Install method | Path |
+|---|---|
+| pip (`pip install pandaone-guard`) | `<Python>\Lib\site-packages\pandaone\installer\windows\` |
+| Windows installer (.exe) | `%LOCALAPPDATA%\Pandaone\_internal\pandaone\installer\windows\` |
+| Source checkout | `src\pandaone\installer\windows\` |
+
+> Note: the literal path `installer\windows\install_context_menu.ps1` **does not exist in any of the
+> three cases** — the repo-root `installer\` directory holds Inno Setup build output, not these scripts.
+
 `DryRun` only prints the plan without writing registry (for testing).
+
+> ⚠️ Windows PowerShell 5.1 users: the script contains Chinese text and must carry a UTF-8 BOM to be
+> parsed correctly by 5.1 (shipped with BOM since v0.7.34.2). If you copied the script yourself from an
+> older version, re-download it.
 
 ### macOS (Automator Quick Action)
 
@@ -42,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File installer\windows\install_context_menu.
 Manual run:
 
 ```bash
-bash installer/macos/install_context_menu.sh
+bash "$(python3 -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','macos','install_context_menu.sh'))")"
 ```
 
 ### Linux (Nautilus + Dolphin)
@@ -55,7 +73,7 @@ bash installer/macos/install_context_menu.sh
 Manual run:
 
 ```bash
-bash installer/linux/install_context_menu.sh
+bash "$(python3 -c "import pandaone,os;print(os.path.join(os.path.dirname(pandaone.__file__),'installer','linux','install_context_menu.sh'))")"
 ```
 
 ## Workflow Example
@@ -68,8 +86,10 @@ bash installer/linux/install_context_menu.sh
 
 ## File Layout
 
+The scripts ship inside the `pandaone` package, under its `installer/` subdirectory:
+
 ```
-installer/
+<pandaone package dir>/installer/
 ├── windows/
 │   ├── install_context_menu.ps1
 │   └── uninstall_context_menu.ps1
@@ -83,6 +103,9 @@ installer/
     ├── nautilus/Pandaone
     └── dolphin/pandaone-lock.desktop
 ```
+
+Package directory: `<Python>\Lib\site-packages\pandaone\` for a pip install, `src\pandaone\` in a source
+checkout. Print it with `python -c "import pandaone,os;print(os.path.dirname(pandaone.__file__))"`.
 
 ## First Principles
 
