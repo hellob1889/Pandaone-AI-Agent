@@ -1,3 +1,97 @@
+## [0.7.34.4] - 2026-11-02
+
+**把审计防线从「查路径」升级为「查内容」—— 堵住"一次旧审批永久放行任意后续改写"的漏洞。**
+
+### Fixed: 一次旧审批即可让被完全改写的内容畅通无阻
+
+**症状**：某个文件一年前被审计过一次，之后被**完全改写**成恶意内容（不再做任何新审计），
+`pre-commit` hook 与 `pandaone ci` **都放行**，CI 还输出「所有变更均已审计」。
+
+**实测复现**（`work/_repro_a1_v5.py`，修复前 exit 2 = 漏洞存在）：
+
+```
+app.py 曾有 APPROVED 记录 -> 改写成 os.system('echo PWNED') -> git add
+  hook exit = 0                (放行)
+  pandaone ci exit = 0         ("[OK] PASS — 所有变更均已审计")
+```
+
+**根因**：审计记录里只有 `file` **路径**和截断到 500 字符的 `new_content`，**没有内容哈希**，
+`commit_hash` 也恒为 `""`（写在 commit 之前）。于是校验方只能问
+「这个路径历史上有没有出现过 APPROVED」，**问不了「当前内容对不对」**——
+一次授权就无限期保护了该文件之后的所有改写。这不是精度问题，是**产品核心承诺（所有改动必须经过审计）
+的兑现缺口**：L3 防线形同虚设。
+
+**修法**：
+
+1. **写审计记录时绑定内容哈希**（`cmd_write`）
+   - `content_sha256`：**git index blob 的 SHA256**（即本次提交真正落地的内容）
+   - `content_sha256_raw`：工作区文件原始字节的 SHA256（仅供诊断）
+   - `pre_sha256`：改写前的原内容哈希（HEAD blob 口径）
+   > 取 index blob 而非工作区文件是关键：Windows 上 `write_text` 写 CRLF、index 存 LF，
+   > 两者字节不同，必须统一到 **index 口径** 才能比对。
+
+2. **校验时比对内容哈希**
+   - 新增共享模块 `src/pandaone/audit_binding.py`，`pre-commit` hook 与 `pandaone ci` **共用同一套判定**（避免两处实现漂移）
+   - 对每个 staged 受保护文件，取 **index 里的内容**（`git cat-file blob :<path>`）算 SHA256，
+     与该文件**最近一条带 `content_sha256` 的 APPROVED 记录**比对
+   - 一致 → 通过；不一致 → **拒绝**
+
+3. **渐进增强，兼容存量**（存量 277+ 条记录都没有 `content_sha256`）
+   - 该文件**有**带哈希的记录 → 严格比对，不一致即拒
+   - 只有**无哈希的旧记录** → 保留原「按路径放行」，但打印 WARN：
+     *「历史审批未绑定内容，本次按路径放行；建议重新审计一次以启用内容校验」*
+   - **完全没有**记录 → 拒绝（保持现状）
+
+### Fixed: 同一批次的三个绕过路径
+
+- **dotfile 逃逸**：hook 用 `Path(f).suffix` 匹配受保护扩展名，而 `Path(".env").suffix == ''`
+  → **`.env` 永远不被检查**（但 `pandaone write` 与 watchdog 用的是能识别 dotfile 的 `_effective_suffix`）。
+  现 hook 与 CI 改用同一套 `effective_suffix` 逻辑。
+- **rename 逃逸**：hook 用 `--diff-filter=AM`，漏掉 R/C → `git mv a.py b.py` 后新路径不在检查集内。
+  现改为 `--diff-filter=ACMR`，rename 的**目标路径**需独立审批。
+- **`pandaone ci` 的 base 静默降级**：用户**显式**传的 `--base` 不存在时静默降级到 `HEAD~1`，
+  审计范围被悄悄缩小（实测漏掉另一个同样未审计的文件）。
+  现改为：**显式传的 base 解析失败直接 exit 1**；只有**未传** `--base` 时才允许 fallback，并在输出里写明降级到了什么。
+
+### 验证
+
+| 场景 | 结果 |
+|---|---|
+| 已审计文件被完全改写 | hook **拒绝**（exit 1）/ ci **拒绝**（exit 1） |
+| 重新审计后又被改写 | **拒绝** |
+| index 内容 == 审批哈希 | **放行**（不堵死正常流程） |
+| 老记录（无 `content_sha256`） | 放行 + **WARN** 提示重新审计 |
+| 完全无记录的受保护文件 | **拒绝** |
+| `.env`（dotfile）在保护列表内 | **被检查** |
+| `git mv` 后新路径 | 需独立审批（**拒绝**） |
+
+新增回归测试 `tests/test_audit_content_binding.py`（509 行）。
+
+### 附带：修正 `cmd_upgrade` 关于指纹自锁后果的错误表述
+
+原 docstring 写「漏了第二步…连 `pandaone --version` 都看不到（指纹校验发生在 --version 分支之前）」——
+**该表述与代码不符**：自 v0.7.19 起 `--version` / `-V` / `--help` / `-h` 这四个 meta 命令**豁免指纹校验**
+（`part_006.py` 的 `_meta_cmds`）。本轮实测把 `~/.pandaone_fp.txt` 的 hash 改成全 0 后，
+`--version` 仍正常输出且 exit=0。被锁死的是 `doctor` / `status` 等业务子命令，
+以及位于门禁之后的 `--reset-fingerprint-lock` / `--set-fingerprint-password`。
+已补上三条自助手段（`--update-fingerprint 0000`、单独 `--trust-default`、删除 `~/.pandaone_fp.txt`），
+并说明 `--trust-default --version` **无效**（meta 豁免先命中，trust_default 分支不会执行）。
+
+### 附带：补 0.7.29.0 独立段落，消除版本号序列缺口
+
+CHANGELOG 里 0.7.24 → 0.7.34.3 的序列**缺 0.7.29.0 一段**（0.7.30.0 / 0.7.28.0 都在），
+读者会以为该版本什么都没做 —— 实际它修的是 `path_conflicts.shadows()` 漏检查同名 `pandaone-mcp` 入口
+（该修复的内容被并入了 0.7.34.1 段落，导致归属不清）。已补独立段落并注明其来历。
+
+同时在 0.7.34.1 段落的聚合发布说明里补上 **0.7.34.0**：它是本项目抬过但**未发出**的中间版本号
+（PyPI 返回 404 且 GitHub 无该 Release），其改动随后并入 0.7.34.1。
+
+### 关于"这个漏洞存在了多久"
+
+审计日志的 `commit_hash` 恒为 `""`、`content_sha256` 从来没有过 —— 说明**自这套机制诞生起，
+审批就只绑路径、不绑内容**。这意味着历史上所有"已审计"的文件，其审批至今仍在被无限期复用。
+本版起新产生的记录带哈希，老记录需要重新审计一次才会启用严格校验。
+
 ## [0.7.34.3] - 2026-10-31
 
 **让 PowerShell 与 CLI 两个入口装出**完全一致**的右键菜单，并修掉文档里一条"照抄必然失败"的命令。**
