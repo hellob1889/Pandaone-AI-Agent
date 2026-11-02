@@ -22,6 +22,9 @@ from pandaone.i18n import t, init as i18n_init
 ROOT = Path(__file__).resolve().parent
 TEMPLATE = ROOT / "templates" / "pre-commit-hook"
 CHECK_SCRIPT = ROOT / "templates" / "pre-commit-check.py"
+# v0.7.35: 内容绑定判定模块（hook 与 pandaone ci 共用）。
+# hook 模板是独立副本, 不能 import 主包 -> 把同一份模块一起拷到 .pandaone/
+BINDING_MODULE = ROOT / "audit_binding.py"
 
 
 def _write_git_exe_hint(pandaone_dir: Path) -> None:
@@ -71,6 +74,10 @@ def install_hook(root: Path) -> int:
     pandaone_dir.mkdir(parents=True, exist_ok=True)
     if CHECK_SCRIPT.exists():
         shutil.copy(CHECK_SCRIPT, pandaone_dir / "pre-commit-check.py")
+    # v0.7.35: 共享判定模块一起拷贝（hook 模板按同目录 import 它）
+    if BINDING_MODULE.exists():
+        shutil.copy(BINDING_MODULE, pandaone_dir / "audit_binding.py")
+        print(t("_hook_binding_copied", path=pandaone_dir / "audit_binding.py"))
     # 固化 git 绝对路径：hook 运行时的 PATH 不可信（MSYS 转码会破坏中文路径）
     _write_git_exe_hint(pandaone_dir)
 

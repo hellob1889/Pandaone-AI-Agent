@@ -92,6 +92,7 @@ HIDDEN_IMPORTS = [
     "pandaone.pandaone_serve",
     "pandaone.i18n_extras",
     "pandaone.git_ops",
+    "pandaone.audit_binding",
     # monkey-patch 注册的新子命令
     "pandaone.cmd_doctor",
     "pandaone.cmd_setup",

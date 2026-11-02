@@ -298,8 +298,25 @@ def cmd_ci(args):
         return 1
     text_exts = set(config.get("protected_extensions", [".py"]))
     binary_exts = set(config.get("binary_protected_extensions", []))
-    base = args.base or "main"
+    # v0.7.35（A1 盲区修复）：CI 与 hook 共用同一套内容绑定判定。
+    # 共享模块拿不到 → fail closed（不能退化成"只查路径"）。
+    binding = _load_audit_binding()
+    if binding is None:
+        print(t("ci_reject_binding_missing"))
+        return 1
     head = args.head or "HEAD"
+    # --- v0.7.35：base 解析不再静默降级 ---
+    # 用户**显式**传的 --base 解析失败 → 直接 exit 1。
+    # 静默降级是最危险的失败模式：CI 看起来通过了，实际审计范围被悄悄缩小。
+    # 只有用户**没传** --base 时才允许 fallback，并在输出里写明降级到了什么。
+    explicit_base = bool(str(getattr(args, "base", "") or "").strip())
+    if explicit_base:
+        base = str(args.base).strip()
+        candidates = [base, f"origin/{base}"]
+    else:
+        base = "main"
+        candidates = [base, f"origin/{base}", "HEAD~1", "main", "master",
+                      "origin/main", "origin/master"]
     try:
         r = _git_run("rev-parse", "--is-inside-work-tree")
         if r is None or r.returncode != 0:
@@ -318,19 +335,33 @@ def cmd_ci(args):
     #   1) 用户传 --base main  → 直接用 main(尊重显式意图)
     #   2) --base NONEXISTENT  → HEAD~1 fallback(原行为保留)
     #   3) 没传 base(默认 main) → main(原行为保留)
-    candidates = [base, f"origin/{base}", "HEAD~1", "main", "master", "origin/main", "origin/master"]
+    base_resolved = False
+    # PR #33 fix (baseline order): 用户的 base 必须优先于 HEAD~1 fallback。
+    # 之前 candidates[0] = "HEAD~1" 永远存在,导致即使传 --base main 也被 HEAD~1 顶替,
+    # --base 参数实际失效。改成 base -> origin/base -> HEAD~1 -> main/master,这样:
+    #   1) 用户传 --base main  -> 直接用 main(尊重显式意图)
+    #   2) --base NONEXISTENT  -> v0.7.35 起**不再**静默 fallback,直接 exit 1
+    #   3) 没传 base(默认 main) -> main(原行为保留,允许 fallback)
     for ref in candidates:
         if _resolve_ref(ref):
             base = ref
             base_resolved = True
             break
     if not base_resolved:
+        if explicit_base:
+            # 显式指定的基线解析不了 -> 拒绝(不能悄悄换一个更小的审计范围)
+            print(t("ci_reject_base_not_found", base=base))
+            return 1
         r_any = _git_run("rev-list", "-n", "1", "--all")
         if r_any is None or r_any.returncode != 0 or not r_any.stdout.strip():
             print(t("ci_pass_empty"))
             return 0
         print(t("ci_reject_no_baseline", base=base))
         return 1
+    if not explicit_base and base != "main":
+        # 未显式指定 base 时才允许 fallback -- 但必须写明降级到了什么
+        print(t("ci_base_fallback", base=base))
+
     diff_range = f"{base}...{head}" if head == "HEAD" else f"{base}..{head}"
     r = _git_run("diff", "--name-only", diff_range, timeout=10)
     if r is None or r.returncode != 0:
@@ -357,8 +388,12 @@ def cmd_ci(args):
         except _json.JSONDecodeError:
             pass
     violations = []
+    legacy_files = []
+    # CI 校验的是**已提交内容**：取 head ref 里的 blob（不是工作区文件）
+    head_map = binding.ref_blob_map(GIT, root, head)
     for rel in changed_files:
-        ext = Path(rel).suffix
+        # dotfile 感知的有效后缀（Path(".env").suffix == '' 会让 .env 逃过检查）
+        ext = binding.effective_suffix(rel)
         if ext in binary_exts:
             fp = root / rel
             if not fp.exists():
@@ -370,6 +405,24 @@ def cmd_ci(args):
         elif ext in text_exts:
             if rel not in approved_files:
                 violations.append({"file": rel, "type": "text", "reason": "no APPROVED audit"})
+                continue
+            # --- 内容绑定校验（与 pre-commit hook 共用同一套判定）---
+            blob_sha = head_map.get(rel)
+            content = binding.blob_bytes(GIT, root, blob_sha) if blob_sha else None
+            verdict = binding.verify_content(rel, content, audit_records)
+            status = verdict.get("status")
+            if status == binding.STATUS_MISMATCH:
+                violations.append({"file": rel, "type": "text",
+                                   "reason": t("ci_reject_content_mismatch")})
+            elif status == binding.STATUS_LEGACY:
+                # 存量记录（无 content_sha256）-> 按路径放行 + 提示
+                legacy_files.append(rel)
+            elif status == binding.STATUS_NO_CONTENT:
+                # 取不到内容（例如该文件在 head 处已被删除）-> 跳过内容校验
+                continue
+    for rel in legacy_files:
+        print(t("ci_legacy_no_hash", file=rel))
+
     print("=" * 64)
     print(t("ci_header", root=root))
     print(t("ci_baseline", base=base, head=head))
