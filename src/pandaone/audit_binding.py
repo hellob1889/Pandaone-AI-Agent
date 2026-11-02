@@ -220,6 +220,12 @@ def index_blob_bytes(git_exe, repo_root, rel_path):
     return blob_bytes(git_exe, repo_root, sha)
 
 
+def ref_blob_bytes(git_exe, repo_root, rel_path, ref):
+    """取某个 ref（如 HEAD）里某个路径的字节（= 该 ref 上的已提交内容）。"""
+    sha = ref_blob_map(git_exe, repo_root, ref).get(norm_rel(rel_path))
+    return blob_bytes(git_exe, repo_root, sha)
+
+
 # ============================================================
 # 审计记录
 # ============================================================
