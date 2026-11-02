@@ -418,6 +418,10 @@ class TestWriteRecordsContentHash:
         assert last["content_sha256"] == hashlib.sha256(committed).hexdigest(), (
             "content_sha256 必须是**真正落库内容**的哈希")
         assert last.get("pre_sha256"), "审计记录应带 pre_sha256（改写前原内容哈希）"
+        # pre_sha256 必须是**改写前**已提交内容的哈希（与 content_sha256 同一口径）
+        prev = _git_bytes(["cat-file", "blob", "HEAD~1:app.py"], project)
+        assert last["pre_sha256"] == hashlib.sha256(prev).hexdigest(), (
+            "pre_sha256 必须是改写前 HEAD 内容的哈希")
 
     def test_write_then_rewrite_is_rejected_by_hook(self, tmp_path):
         """write 之后再次改写 → hook 拒绝（端到端闭环）"""
