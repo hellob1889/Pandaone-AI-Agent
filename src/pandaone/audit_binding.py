@@ -179,9 +179,11 @@ def index_blob_map(git_exe, repo_root):
         if not entry:
             continue
         meta, _, path = entry.partition("\t")
+        # `git ls-files --stage` 的字段顺序是: <mode> <object> <stage>\t<path>
+        # （object 才是 blob sha —— 取错字段会拿到 "100644" 这种 mode）
         parts = meta.split()
         if len(parts) >= 3 and path:
-            out[norm_rel(path)] = parts[0]
+            out[norm_rel(path)] = parts[1]
     return out
 
 
@@ -195,6 +197,7 @@ def ref_blob_map(git_exe, repo_root, ref):
         if not entry:
             continue
         meta, _, path = entry.partition("\t")
+        # `git ls-tree` 的字段顺序是: <mode> <type> <object>\t<path>
         parts = meta.split()
         if len(parts) >= 3 and path:
             out[norm_rel(path)] = parts[2]
