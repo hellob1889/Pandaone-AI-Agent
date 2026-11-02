@@ -228,6 +228,7 @@ def cmd_write(args):
       8. 写审计记录
     """
     import datetime as dt
+    import hashlib
     import json
     import os
     import stat
@@ -367,6 +368,16 @@ def cmd_write(args):
     # Bug #12 fix: 整个 step 4 包在 try/finally 中，确保文件 mode 始终恢复。
     # 任何 write_text/write_bytes 抛错（hidden/system 文件、磁盘满等），
     # finally 块都会恢复原始 mode —— 审计门禁不能因 IO 错误绕过文件锁。
+    # v0.7.35（A1 盲区修复）：记录**改写前**的原内容哈希。
+    # 与 content_sha256 同口径优先用 git blob（见步骤 [7]），
+    # 这里先兜住"工作区原始字节"，HEAD 上没有该文件时也能用。
+    pre_write_sha256 = ""
+    if not is_new_file:
+        try:
+            pre_write_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+        except OSError:
+            pre_write_sha256 = ""
+
     write_error = None
     try:
         if is_binary:
@@ -477,6 +488,53 @@ def cmd_write(args):
         except Exception:
             old_content_diff = ""
             new_content_diff = ""
+
+    # --- v0.7.35（A1 盲区修复）：内容绑定 ---
+    # 审计记录必须带上"这次改动真正要提交的内容"的 SHA256，
+    # 否则**一次旧审批**就能无限期放行该文件之后的任意改写
+    # （实测：把 app.py 完全改写成恶意内容，不做任何新审计，
+    #   pre-commit hook 与 pandaone ci 都 exit 0）。
+    #
+    # 绑定对象 = **git index 里的 blob**，不是工作区文件的原始字节：
+    #   Windows 上 write_text 写 CRLF，而 .gitattributes / core.autocrlf
+    #   会让 index 里存 LF —— 两者哈希不同。若绑工作区字节，
+    #   每次正常审计后的提交都会被误判成"内容被改写"而拒绝。
+    #   index blob 既是真正落库的内容，语义上也最准确。
+    binding = _load_audit_binding()
+    content_sha256 = ""
+    content_sha256_raw = ""
+    pre_sha256 = pre_write_sha256
+    GIT = _resolve_git_exe()
+    git_enabled = bool(config.get("git_enabled", True))
+    target_rel_str = str(target_rel).replace("\\", "/")
+    try:
+        content_sha256_raw = hashlib.sha256(target.read_bytes()).hexdigest()
+    except OSError:
+        content_sha256_raw = ""
+    if pre_write_sha256:
+        # 改写前的原内容哈希：优先取 HEAD blob（与 content_sha256 同一口径）
+        try:
+            head_blob = (binding.ref_blob_bytes(GIT, root, target_rel, "HEAD")
+                         if binding is not None else None)
+            if head_blob is not None:
+                pre_sha256 = hashlib.sha256(head_blob).hexdigest()
+        except Exception:
+            pass
+    if git_enabled and binding is not None:
+        # 先把目标文件入 index，再取 index blob 算哈希
+        try:
+            r_add0 = subprocess.run(
+                [GIT, "add", "-f", target_rel_str],
+                cwd=str(root), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10,
+            )
+            if r_add0.returncode == 0:
+                blob = binding.index_blob_bytes(GIT, root, target_rel)
+                if blob is not None:
+                    content_sha256 = hashlib.sha256(blob).hexdigest()
+        except Exception:
+            pass
+
     record = {
         "id": audit_id,
         "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -494,6 +552,13 @@ def cmd_write(args):
         "new_content": new_content_diff,
         "lines_added": 0 if is_binary else _count_diff_lines(args, target, removed=False),
         "lines_removed": 0 if is_binary else _count_diff_lines(args, target, removed=True),
+        # --- 内容绑定字段（v0.7.35）---
+        # content_sha256: git index blob 的 SHA256 = 这次提交真正落库的内容
+        # content_sha256_raw: 工作区文件原始字节的 SHA256（仅供追溯）
+        # pre_sha256: 改写前的原内容哈希（HEAD blob 口径；新文件为空）
+        "content_sha256": content_sha256,
+        "content_sha256_raw": content_sha256_raw,
+        "pre_sha256": pre_sha256,
     }
     with audit_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
