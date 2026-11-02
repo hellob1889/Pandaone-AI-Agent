@@ -8,10 +8,18 @@ cmd_upgrade.py — `pandaone upgrade`：一条命令完成升级
 ----------
 现在的升级流程是：
     pip install --upgrade pandaone-guard
-    pandaone --update-fingerprint 0000      # ← 少了这步，整个 CLI 全废
-第二步不能漏：漏了之后所有子命令全部 exit 1，连 `pandaone --version`
-都看不到（指纹校验发生在 --version 分支之前）。用户看到的现象是
-"命令坏了"，但完全不知道原因。
+    pandaone --update-fingerprint 0000      # ← 少了这步，除 meta 命令外全部 exit 1
+第二步不能漏：漏了之后除 meta 命令外的所有子命令全部 exit 1。
+用户看到的现象是"命令坏了"，但完全不知道原因。
+
+> v0.7.34.4 更正：此处原写"连 `pandaone --version` 都看不到"，**该表述是错的**。
+> 自 v0.7.19 起 `--version` / `-V` / `--help` / `-h` 这四个 meta 命令**豁免指纹校验**
+> （见 `cli_chunks/part_006.py` 的 `_meta_cmds`），实测指纹被篡改后 `--version`
+> 仍能正常输出、exit=0。被锁死的是 `doctor` / `status` 等业务子命令，
+> 以及位于门禁之后的 `--reset-fingerprint-lock` / `--set-fingerprint-password`。
+> 自救手段：`pandaone --update-fingerprint 0000`、单独执行 `pandaone --trust-default`、
+> 或直接删除 `~/.pandaone_fp.txt`（下次运行走首次运行分支自动重播种）。
+> 注意 `--trust-default --version` **无效** —— meta 豁免先命中，trust_default 分支不会执行。
 
 upgrade 做的事
 --------------
