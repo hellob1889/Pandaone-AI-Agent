@@ -15,7 +15,26 @@ Phase 10: i18n — 所有 print 走 t()，由 pandaone.i18n 提供。
   - 读 config.json 获取保护扩展名
   - 读 git staged 文件
   - 对每个 staged 受保护文件查审计日志的 APPROVED 记录
-  - 缺记录就 exit 1（拒绝 commit）
+  - **比对内容哈希**（content_sha256）：审批放行的是"这一次改动"，
+    不是"这个路径"（否则一次旧审批可无限期放行后续任意改写）
+  - 缺记录 / 哈希不一致 → exit 1（拒绝 commit）
+
+内容绑定（A1 盲区修复）
+----------------------
+  旧实现只做"路径成员判定"：只要这个文件历史上有过一条 APPROVED 记录，
+  之后无论内容被改成什么都能提交。实测：把 app.py 完全改写成
+  `import os; os.system('echo PWNED')`，hook 与 pandaone ci 都放行。
+
+  现在：写审计记录时落 content_sha256（= git index blob 的 SHA256，
+  也就是**这次改动真正要提交的内容**），校验时取 index 里的字节算
+  SHA256 与之比对，不一致即拒绝。
+
+  存量记录没有 content_sha256 → 保留"按路径放行"并打印 warn
+  （渐进增强：不能因为升级就让所有存量项目的 hook 突然拒绝所有提交）。
+
+  判定逻辑放在 pandaone/audit_binding.py（共享模块），
+  本模板是**独立副本**：安装时 audit_binding.py 会被一起拷到 .pandaone/，
+  模板优先 import 同目录副本，其次 import 已安装的 pandaone 包。
 """
 import json
 import ntpath
@@ -182,7 +201,7 @@ def _resolve_git_exe():
     # Git 在 hook 环境里会注入 GIT_EXEC_PATH
     # （Windows: <root>\mingw64\libexec\git-core；Linux: /usr/libexec/git-core）
     # -> 从它反推安装根，再找根目录下的 git 可执行文件。
-    # 这比硬编码任何人的安装路径都可靠：Git for Windows 装在 C/D/E 盘任意
+    # 这比硬编码任何人的机器路径都可靠：Git for Windows 装在 C/D/E 盘任意
     # 位置都能命中，也不必把作者机器的目录结构分发到每个用户机器上。
     exec_path = os.environ.get("GIT_EXEC_PATH") or ""
     if exec_path:
@@ -215,7 +234,7 @@ def t_safe(key: str, **kwargs) -> str:
     安全翻译函数。
 
     正常路径: 调 pandaone.i18n.t() (含 zh-CN + en 双语, 见 i18n.py 的
-    _hook_no_config / _hook_init_hint / ... 等 13 个 key).
+    _hook_no_config / _hook_init_hint / ... 等 key).
 
     兜底路径: pandaone 未安装 (hook sub-shell PATH 受限时) 用一段极简英文
     占位, 避免再硬编码中文字符串触发 i18n Hardcoded Chinese Audit.
@@ -248,7 +267,43 @@ _FALLBACK_EN = {
     "_hook_use_pandaone_write": "Please use pandaone write instead of git commit:",
     "_hook_write_example": '  pandaone write --file <FILE> --reason "..." --problem "..." --approach "..."',
     "_hook_bypass_hint": "To bypass audit (not recommended), use: git commit --no-verify",
+    "_hook_binding_missing": "[Pandaone] Reject commit: audit content-binding module (audit_binding.py) is missing. Please run pandaone install-hook again.",
+    "_hook_legacy_no_hash": "[WARN] Historical approval for {file} is not bound to content (no content_sha256); passing by path this time. Re-audit it to enable content verification.",
+    "_hook_reject_content_mismatch": "[Pandaone] Reject commit: the following files were rewritten without a new audit",
+    "_hook_mismatch_detail": "  {file} (expected {expected} / actual {actual})",
+    "_hook_mismatch_hint": "Please re-audit these files with pandaone write before committing:",
+    "_hook_content_unavailable": "[Pandaone] Reject commit: cannot read staged content: {file}",
 }
+
+
+def _load_binding():
+    """加载共享的审计内容绑定模块（pandaone/audit_binding.py）。
+
+    优先用**同目录副本**（install-hook 会把 audit_binding.py 一起拷到
+    .pandaone/）——它与本模板版本严格一致，不会出现"新模板 + 旧模块"的
+    组合；其次用已安装的 pandaone 包。
+
+    两者都拿不到 → 返回 None（调用方 fail closed：拒绝提交）。
+    绝不"降级成只查路径"——那等于把 A1 盲区又放回去。
+    """
+    try:
+        import importlib.util
+        sibling = Path(__file__).resolve().parent / "audit_binding.py"
+        if sibling.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "pandaone_audit_binding", str(sibling))
+            if spec is not None and spec.loader is not None:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+    except Exception:
+        pass
+    try:
+        from pandaone import audit_binding as mod
+        return mod
+    except Exception:
+        pass
+    return None
 
 
 def main():
@@ -264,6 +319,15 @@ def main():
         print(t_safe("_hook_init_hint"))
         sys.exit(1)
 
+    # 0. 加载共享判定模块（hook 与 pandaone ci 共用同一份逻辑）
+    binding = _load_binding()
+    if binding is None:
+        print("")
+        print("================================================================")
+        print(t_safe("_hook_binding_missing"))
+        print("================================================================")
+        sys.exit(1)
+
     # 1. 读取受保护扩展名
     try:
         cfg = json.loads(config_path.read_text(encoding="utf-8"))
@@ -272,23 +336,20 @@ def main():
         print(t_safe("_hook_cfg_parse_err", e=e), file=sys.stderr)
         sys.exit(1)
 
+    git_exe = _resolve_git_exe()
+
     # 2. 读取 git staged 文件
-    try:
-        r = subprocess.run(
-            [_resolve_git_exe(), "diff", "--cached", "--name-only", "--diff-filter=AM"],
-            cwd=str(repo_root), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10,
-        )
-        if r.returncode != 0:
-            print(t_safe("_hook_git_diff_err", stderr=r.stderr), file=sys.stderr)
-            sys.exit(1)
-        staged = [f.strip().replace("\\", "/") for f in r.stdout.splitlines() if f.strip()]
-    except Exception as e:
-        print(t_safe("_hook_git_call_err", e=e), file=sys.stderr)
+    #    --diff-filter=ACMR：加上 R(rename)/C(copy)。
+    #    旧实现只有 "AM"，`git mv a.py b.py` 之后 b.py 不在检查集内 → 改名即逃逸。
+    staged = binding.staged_paths(git_exe, repo_root, "ACMR")
+    if staged is None:
+        print(t_safe("_hook_git_diff_err", stderr="git diff --cached failed"), file=sys.stderr)
         sys.exit(1)
 
     # 3. 过滤出受保护扩展名
-    protected_staged = [f for f in staged if Path(f).suffix in protected_exts]
+    #    用 dotfile 感知的 effective_suffix（不是 Path(f).suffix）：
+    #    Path(".env").suffix == '' → .env 永远不被检查。
+    protected_staged = [f for f in staged if binding.effective_suffix(f) in protected_exts]
 
     if not protected_staged:
         # 没有受保护文件被 staged, 放行
@@ -303,31 +364,40 @@ def main():
         print(t_safe("_hook_should_exist", path=audit_path))
         sys.exit(1)
 
-    approved_files = set()
     try:
-        with audit_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                    if rec.get("status") == "APPROVED":
-                        f_norm = str(rec.get("file", "")).replace("\\", "/")
-                        approved_files.add(f_norm)
-                except json.JSONDecodeError:
-                    continue
+        records = binding.load_audit_records(audit_path)
     except Exception as e:
         print(t_safe("_hook_audit_read_err", e=e), file=sys.stderr)
         sys.exit(1)
 
-    # 5. 找出未被审计的文件
-    missing = []
-    for f in protected_staged:
-        f_norm = f.replace("\\", "/")
-        if f_norm not in approved_files and f not in approved_files:
-            missing.append(f)
+    # 5. 逐个受保护文件做内容绑定校验
+    #    关键：取 **index（staged）里的字节**，不是工作区文件。
+    #    工作区可能又改了但没 add —— 真正要提交的是 index 里的内容。
+    index_map = binding.index_blob_map(git_exe, repo_root)
 
+    missing = []
+    mismatched = []
+    unreadable = []
+    legacy_files = []
+
+    for f in protected_staged:
+        content = binding.blob_bytes(git_exe, repo_root, index_map.get(f))
+        verdict = binding.verify_content(f, content, records)
+        status = verdict.get("status")
+        if status == binding.STATUS_NO_RECORD:
+            missing.append(f)
+        elif status == binding.STATUS_MISMATCH:
+            mismatched.append((f, verdict))
+        elif status == binding.STATUS_NO_CONTENT:
+            unreadable.append(f)
+        elif status == binding.STATUS_LEGACY:
+            legacy_files.append(f)
+
+    # 5.1 存量记录（无 content_sha256）：按路径放行，但必须提示
+    for f in legacy_files:
+        print(t_safe("_hook_legacy_no_hash", file=f))
+
+    # 5.2 完全没有任何 APPROVED 记录 → 拒绝（保持原有行为）
     if missing:
         print("")
         print("================================================================")
@@ -339,6 +409,33 @@ def main():
             print(f"  {m}")
         print("")
         print(t_safe("_hook_use_pandaone_write"))
+        print(t_safe("_hook_write_example"))
+        print("")
+        print(t_safe("_hook_bypass_hint"))
+        sys.exit(1)
+
+    # 5.3 取不到待提交内容 → fail closed
+    if unreadable:
+        print("")
+        print("================================================================")
+        print(t_safe("_hook_content_unavailable", file=", ".join(unreadable)))
+        print("================================================================")
+        sys.exit(1)
+
+    # 5.4 内容哈希不一致 → 内容被改写且没有重新审计 → 拒绝
+    if mismatched:
+        print("")
+        print("================================================================")
+        print(t_safe("_hook_reject_content_mismatch"))
+        print("================================================================")
+        print("")
+        for f, verdict in mismatched:
+            print(t_safe("_hook_mismatch_detail",
+                          file=f,
+                          expected=verdict.get("expected", ""),
+                          actual=verdict.get("actual", "")))
+        print("")
+        print(t_safe("_hook_mismatch_hint"))
         print(t_safe("_hook_write_example"))
         print("")
         print(t_safe("_hook_bypass_hint"))
