@@ -613,3 +613,36 @@ def _effective_suffix(path: Path) -> str:
         # .env → .env
         return "." + rest
     return path.suffix
+
+
+def _load_audit_binding():
+    """加载 pandaone.audit_binding（审计内容绑定的共享判定模块）。
+
+    为什么需要 loader 而不是直接 import：
+      cli.py 的各个 chunk 是用 exec() 执行的，PyInstaller 的静态分析
+      **抓不到** chunk 里的 import —— 冻结形态下模块可能不在 PYZ 里
+      （见 build_pyinstaller.py 的 HIDDEN_IMPORTS 注释）。
+      所以先按包 import，失败再按**路径**加载（ROOT/audit_binding.py，
+      源码形态与冻结形态都指向 pandaone 包目录）。
+
+    返回 None 表示拿不到共享判定 —— 调用方必须 fail closed
+    （绝不"降级成只查路径"，那等于把 A1 盲区又放回去）。
+    """
+    try:
+        from pandaone import audit_binding as _mod
+        return _mod
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        path = Path(ROOT) / "audit_binding.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "pandaone_audit_binding", str(path))
+            if spec is not None and spec.loader is not None:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+    except Exception:
+        pass
+    return None
