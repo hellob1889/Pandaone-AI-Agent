@@ -382,7 +382,9 @@ class TestCiBaseResolution:
         _git(["branch", "-M", "feature"], project)
         (project / "extra.txt").write_text("hello\n", encoding="utf-8")
         _git(["add", "extra.txt"], project)
-        _git(["commit", "-m", "second"], project, check=True)
+        # extra.txt 是受保护扩展名 -> 这次 commit 用 --no-verify 绕开 hook
+        # （本用例只关心 ci 的 base 回退提示，不关心 hook）
+        _git(["commit", "--no-verify", "-m", "second"], project, check=True)
 
         rc, out, err = _run_cli("ci", "--root", str(project))
         combined = out + err
