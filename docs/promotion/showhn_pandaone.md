@@ -17,7 +17,7 @@ pandaone status
 
 ## What this is
 
-A free, MIT-licensed MCP server (11 tools) that sits between your AI coding agent (Claude Code, Cursor, Trae, ChatGPT Developer Mode) and your git repo. Every time the AI wants to modify a file, it has to call `pandaone_write` first with a structured explanation. A pre-commit hook then blocks any commit whose changes weren't audited.
+A free, MIT-licensed MCP server (12 tools) that sits between your AI coding agent (Claude Code, Cursor, Trae, ChatGPT Developer Mode) and your git repo. Every time the AI wants to modify a file, it has to call `pandaone_write` first with a structured explanation. A pre-commit hook then blocks any commit whose changes weren't audited.
 
 The result: a JSONL audit log of every AI code change, with the AI's own structured description of why.
 
@@ -50,7 +50,7 @@ Git tells me *what* changed. It doesn't tell me *why*. AI coding agents are bigg
 
 3. **The AI must lie in writing.** A malicious AI can lie in the audit record, but that lie is now permanent in JSONL. When the on-call engineer finds the bug, the lie is searchable. Way higher bar than "lie at all".
 
-4. **MCP annotations filled in** (readOnlyHint, destructiveHint, idempotentHint, openWorldHint on all 11 tools). This is what got us into OpenAI's directory.
+4. **MCP annotations filled in** (readOnlyHint, destructiveHint, idempotentHint, openWorldHint on all 12 tools). This is what got us into OpenAI's directory.
 
 5. **Honest scope:** not a linter, not a code review replacement, not a security boundary on its own. It's a structured *intent capture* layer.
 
@@ -58,7 +58,7 @@ Git tells me *what* changed. It doesn't tell me *why*. AI coding agents are bigg
 
 ## Numbers
 
-- 11 MCP tools, all 4 annotation hints filled
+- 12 MCP tools, all 4 annotation hints filled
 - 15 tests, 100% MCP server coverage
 - M8ven Trust Index: **100/100, A grade, Verified Publisher, Live Monitored**
 - 137 KB wheel, pure Python, deps are `click` + `rich`

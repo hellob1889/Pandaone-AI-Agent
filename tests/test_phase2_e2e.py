@@ -144,7 +144,12 @@ def test_full_defense_chain(tmp_path):
 
     # ============ Phase 2D: status 显示告警 ============
     r = run(["status", "--root", str(project)], cwd=project)
-    assert r.returncode == 0
+    # v0.7.35: 审计日志里有 UNAUTHORIZED（watchdog 抓到的真篡改）→ L6 判 FAIL
+    #          → status 退出码 3（与 doctor 一致）。旧行为恒 0 ——
+    #          那等于"抓到篡改也不吭声"，仪表盘成了摆设。
+    assert r.returncode == 3, (
+        f"检测到 UNAUTHORIZED 时 status 必须非 0 退出:\n{r.stdout}"
+    )
     out = r.stdout
     # 应有 L1/L2/L5 标记
     assert "[L1" in out

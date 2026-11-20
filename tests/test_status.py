@@ -60,19 +60,26 @@ def test_status_after_init(tmp_path):
 
 
 def test_status_shows_watchdog_pid(tmp_path):
-    """status 应展示 watchdog 状态（PID 存在/不存在）"""
+    """status 应展示 watchdog 状态（PID 存在/不存在）
+
+    v0.7.35: PID 文件在、但进程已经不在 → 这是"跑过但坏了"，
+    status 判 FAIL 并**退出 3**（与 doctor 的 L2 同一判据）。
+    旧行为是显示"未运行"、退出 0 —— 看起来无害，其实是在说谎：
+    看门狗早就没了，用户却以为保护还在生效。
+    """
     setup(tmp_path)
 
-    # 模拟 watchdog 写 PID
+    # 模拟 watchdog 写 PID（进程已不存在）
     pid_path = tmp_path / ".pandaone" / ".watchdog_pid"
     pid_path.write_text("12345", encoding="utf-8")
 
     r = run(["status", "--root", str(tmp_path)], cwd=tmp_path)
-    assert r.returncode == 0
+    # 看门狗层坏了 → 退出码必须非 0（与 doctor 一致）
+    assert r.returncode == 3, f"看门狗层坏了必须非 0 退出:\n{r.stdout}"
     # 应展示 watchdog 状态
     assert "watchdog" in r.stdout.lower() or "L2" in r.stdout
-    # PID 文件存在时应显示运行中
-    assert ("12345" in r.stdout) or ("运行" in r.stdout) or ("运行中" in r.stdout)
+    # 应能看到那个 PID（说明它读到了残留的 pid 文件）
+    assert "12345" in r.stdout, f"status 没展示残留 PID:\n{r.stdout}"
 
 
 def test_status_watchdog_not_running(tmp_path):

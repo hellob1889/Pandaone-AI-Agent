@@ -38,7 +38,7 @@ AI：3 分钟改了 200 行，8 个文件，新增 2 个依赖
 
 - 免费、MIT 开源
 - 一个 **MCP server**（Model Context Protocol）
-- 提供 **11 个工具**，AI 可以调用
+- 提供 **12 个工具**，AI 可以调用
 - 核心功能：AI 改文件前必须 `pandaone_write` 写一段结构化说明（problem / reason / approach 三段式）
 - 写完自动追加到 `.pandaone/pandaone.jsonl` 审计日志
 - git pre-commit 钩子强制拦截未审计的变更
@@ -166,7 +166,7 @@ ChatGPT 直连（Developer Mode）也支持，README 里给了完整 5 步指引
 
 ## 九、M8ven Trust Index A 级认证
 
-最近把 11 个工具的 MCP annotations 全补齐了（`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`），M8ven 评分从 74 涨到 **100/A**：
+最近把 12 个工具的 MCP annotations 全补齐了（`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`），M8ven 评分从 74 涨到 **100/A**：
 
 - Verified Publisher 徽章
 - Live Monitored（每次 push 自动重测）

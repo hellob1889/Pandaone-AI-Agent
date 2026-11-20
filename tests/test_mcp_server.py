@@ -115,7 +115,7 @@ class TestMCPToolsList:
     """MCP tools/list 方法"""
 
     def test_tools_list_returns_all_tools(self):
-        """tools/list 应列出 init/lock/unlock/write/log/status/watch/install-hook/install-git"""
+        """tools/list 应列出 init/lock/unlock/write/log/status/doctor/watch/install-hook/install-git"""
         p = _start_mcp_server()
         try:
             # 先 initialize（部分实现可能要求）
@@ -132,7 +132,8 @@ class TestMCPToolsList:
             tool_names = {t["name"] for t in tools}
             # 必须包含的核心工具
             for required in ["pandaone_init", "pandaone_write", "pandaone_log",
-                             "pandaone_status", "pandaone_lock", "pandaone_unlock"]:
+                             "pandaone_status", "pandaone_doctor",
+                             "pandaone_lock", "pandaone_unlock"]:
                 assert required in tool_names, f"缺少工具: {required}"
         finally:
             _stop(p)
@@ -175,7 +176,7 @@ class TestMCPToolsList:
             tools = resp["result"]["tools"]
             required_hints = ("readOnlyHint", "destructiveHint",
                                "idempotentHint", "openWorldHint")
-            assert len(tools) == 11, f"应恰好 11 个工具，实际 {len(tools)}"
+            assert len(tools) == 12, f"应恰好 12 个工具，实际 {len(tools)}"
             for tool in tools:
                 name = tool.get("name", "<unnamed>")
                 assert "annotations" in tool, (
@@ -286,6 +287,51 @@ class TestMCPToolsCall:
                 },
             })
             assert "result" in resp
+        finally:
+            _stop(p)
+
+    def test_call_doctor_returns_machine_readable_report(self, tmp_path):
+        """v0.7.35: pandaone_doctor 应返回**可解析**的自检报告。
+
+        为什么必须有这个工具（不是锦上添花）：
+          原来 Agent 只能看到 pandaone_status —— 而 status 有盲区
+          （只看"PID 还活着"、L5 丢 form 字段、L1 少算受保护文件）。
+          Agent 拿不到"真坏在哪"，只能看到仪表盘 → 会误判成"一切正常"。
+          doctor --json 输出**单个** JSON 文档（stdout 纯度有测试守着），
+          机器端可直接解析出 failed_layers。
+        """
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(SRC_DIR)
+        subprocess.run([sys.executable, "-m", "pandaone", "init", "--root", str(tmp_path)],
+                       cwd=str(tmp_path), env=env, capture_output=True)
+
+        p = _start_mcp_server()
+        try:
+            _send(p, {
+                "jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "t", "version": "0"}},
+            })
+            resp = _send(p, {
+                "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+                "params": {
+                    "name": "pandaone_doctor",
+                    "arguments": {"root": str(tmp_path)},
+                },
+            })
+            assert "result" in resp, f"失败: {resp}"
+            content = resp["result"]["content"]
+            text = " ".join(
+                c.get("text", "") for c in content
+                if isinstance(c, dict) and c.get("type") == "text"
+            )
+            data = json.loads(text)          # stdout 纯度 → 整段就是一个 JSON 文档
+            assert isinstance(data, dict)
+            assert "layers" in data
+            assert "overall_ok" in data
+            assert "failed_layers" in data
+            # 8 层都要在
+            assert len(data["layers"]) == 8, sorted(data["layers"])
         finally:
             _stop(p)
 

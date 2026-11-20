@@ -91,6 +91,14 @@ pandaone status [--root PATH]
 - [最近 N 条] 最新审计记录
 - [Phase 5] 二进制 snapshot 状态
 
+**三态语义**（v0.7.35，与 `pandaone doctor` **共用同一份判据**）：
+- `[N/A]` 该层从未启用（不是失败）
+- `[OK]` 配置过且通过
+- `[WARN]` 通过但基线不可比（例如 pip 版与 exe 版形态切换）
+- `[FAIL]` 配置过但坏了（例如锁被解除、watchdog PID 被复用、指纹被篡改）
+
+退出码：`0` = 正常；`1` = 项目未初始化；`3` = 有层处于 `[FAIL]`（与 `doctor` 一致）。
+
 ## install-hook — 安装 L3 pre-commit hook
 
 ```bash
@@ -156,7 +164,7 @@ pandaone --update-fingerprint <CODE>
 
 不直接调用，由 MCP client（Claude / Cursor / Trae）连接。
 
-暴露 11 个工具：`pandaone_init` / `pandaone_lock` / `pandaone_unlock` / `pandaone_write` / `pandaone_log` / `pandaone_status` / `pandaone_install_hook` / `pandaone_watch` / `pandaone_install_git` / `pandaone_fingerprint_update` / `pandaone_ci`
+暴露 12 个工具：`pandaone_init` / `pandaone_lock` / `pandaone_unlock` / `pandaone_write` / `pandaone_log` / `pandaone_status` / `pandaone_doctor` / `pandaone_install_hook` / `pandaone_watch` / `pandaone_install_git` / `pandaone_fingerprint_update` / `pandaone_ci`
 
 详见 [MCP 集成](mcp-integration.md)。
 

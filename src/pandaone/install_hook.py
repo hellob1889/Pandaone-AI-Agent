@@ -58,7 +58,14 @@ def _write_git_exe_hint(pandaone_dir: Path) -> None:
 
 
 def install_hook(root: Path) -> int:
-    """安装 pre-commit hook"""
+    """安装 pre-commit hook
+
+    v0.7.35: **复制是硬门禁**。
+      原来复制是条件执行（``if CHECK_SCRIPT.exists():``），打印却是无条件 ——
+      模板缺失时用户照样看到"[OK] pre-commit-check.py 已复制"，而文件根本没
+      拷过去。那不是显示瑕疵，是**谎报**：用户会以为 L3 门禁已就位，实际 hook
+      一跑就 ImportError / FileNotFoundError。现在复制失败一律 return 1。
+    """
     git_hooks = root / ".git" / "hooks"
     if not git_hooks.exists():
         print(t("_hook_no_git", root=root))
@@ -71,13 +78,32 @@ def install_hook(root: Path) -> int:
 
     # Phase 4.6+: 同时复制 pre-commit-check.py 到 .pandaone/（便于 hook 调用）
     pandaone_dir = root / ".pandaone"
-    pandaone_dir.mkdir(parents=True, exist_ok=True)
-    if CHECK_SCRIPT.exists():
-        shutil.copy(CHECK_SCRIPT, pandaone_dir / "pre-commit-check.py")
+    try:
+        pandaone_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(t("_hook_copy_failed", path=pandaone_dir, err=e))
+        return 1
+
     # v0.7.35: 共享判定模块一起拷贝（hook 模板按同目录 import 它）
-    if BINDING_MODULE.exists():
+    # 两个文件都是 hook 的**运行时依赖**：缺任何一个，hook 跑起来就会炸，
+    # 所以缺一即失败（不再"跳过还报成功"）。
+    if not CHECK_SCRIPT.exists():
+        print(t("_hook_copy_failed", path=CHECK_SCRIPT, err="source file missing"))
+        return 1
+    if not BINDING_MODULE.exists():
+        print(t("_hook_copy_failed", path=BINDING_MODULE, err="source file missing"))
+        return 1
+    try:
+        shutil.copy(CHECK_SCRIPT, pandaone_dir / "pre-commit-check.py")
+    except OSError as e:
+        print(t("_hook_copy_failed", path=pandaone_dir / "pre-commit-check.py", err=e))
+        return 1
+    try:
         shutil.copy(BINDING_MODULE, pandaone_dir / "audit_binding.py")
-        print(t("_hook_binding_copied", path=pandaone_dir / "audit_binding.py"))
+    except OSError as e:
+        print(t("_hook_copy_failed", path=pandaone_dir / "audit_binding.py", err=e))
+        return 1
+
     # 固化 git 绝对路径：hook 运行时的 PATH 不可信（MSYS 转码会破坏中文路径）
     _write_git_exe_hint(pandaone_dir)
 
@@ -85,7 +111,11 @@ def install_hook(root: Path) -> int:
     if hook_path.exists():
         # 备份现有 hook
         backup = git_hooks / "pre-commit.backup"
-        shutil.copy(hook_path, backup)
+        try:
+            shutil.copy(hook_path, backup)
+        except OSError as e:
+            print(t("_hook_copy_failed", path=backup, err=e))
+            return 1
         print(t("_hook_backed_up", backup=backup))
 
     # Bug #22 fix: 强制 LF 换行（bash 在 *nix 上不支持 CRLF）
@@ -99,14 +129,20 @@ def install_hook(root: Path) -> int:
     content = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     if content.startswith(b"\xef\xbb\xbf"):
         content = content[3:]
-    hook_path.write_bytes(content)
+    try:
+        hook_path.write_bytes(content)
+    except OSError as e:
+        print(t("_hook_copy_failed", path=hook_path, err=e))
+        return 1
 
     # 添加可执行权限（Unix）
     current = hook_path.stat().st_mode
     hook_path.chmod(current | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     print(t("_hook_installed", hook_path=hook_path))
-    print(t("_hook_check_copied", path=pandaone_dir / 'pre-commit-check.py'))
+    # 只有**真的复制成功**才打印"已复制"
+    print(t("_hook_check_copied", path=pandaone_dir / "pre-commit-check.py"))
+    print(t("_hook_binding_copied", path=pandaone_dir / "audit_binding.py"))
     print(t("_hook_content"))
     return 0
 

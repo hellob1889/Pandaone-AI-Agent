@@ -146,7 +146,7 @@ In your MCP config (`~/.config/claude/config.json`, `~/.cursor/mcp.json`, or sim
 }
 ```
 
-Now Claude/Cursor has 11 tools it can call, including `pandaone_write`. The AI will (or should) call it before modifying your files.
+Now Claude/Cursor has 12 tools it can call, including `pandaone_write`. The AI will (or should) call it before modifying your files.
 
 ### ChatGPT (Developer Mode)
 
@@ -202,7 +202,7 @@ This is the core insight: **"you have to lie in writing"** is a much higher bar 
 - Free, MIT licensed
 - Zero external API calls (no telemetry, no hosted service)
 - 137 KB wheel
-- 11 MCP tools, ~3000 lines of Python
+- 12 MCP tools, ~3000 lines of Python
 - 15 tests, 100% coverage of MCP server
 
 ---

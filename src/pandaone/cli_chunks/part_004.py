@@ -179,34 +179,33 @@ def _print_log(records):
 
 
 def _pid_alive(pid_text: str) -> bool:
-    """v0.7.19: 探测 watchdog PID 是否存活（跨平台用 psutil.pid_exists）"""
-    try:
-        pid = int(pid_text.strip())
-    except (ValueError, AttributeError):
-        return False
-    if pid <= 0:
-        return False
-    if pid > 2**31 - 1:
-        # psutil.pid_exists 内部转 C long, 超大 PID 抛 OverflowError
-        return False
-    try:
-        import psutil
-        return psutil.pid_exists(pid)
-    except ImportError:
-        # psutil 未装时 fallback 到 os.kill (POSIX 正常, Windows 抛 WinError 87 仍 fail)
-        try:
-            os.kill(pid, 0)
-            return True
-        except PermissionError:
-            return True  # 进程存在但属主不同
-        except OSError:
-            return False
+    """探测 watchdog PID 是否存活（跨平台用 psutil.pid_exists）。
+
+    v0.7.35: 实现已下沉到 pandaone.health_probe.pid_alive —— status 与 doctor
+    必须用同一套进程存活判定，否则"PID 还在"会在两个命令上给出不同结论。
+    """
+    from pandaone.health_probe import pid_alive
+    return pid_alive(pid_text)
 
 
 def cmd_status(args):
-    """显示项目状态仪表盘。"""
-    import json
-    import stat
+    """显示项目状态仪表盘。
+
+    v0.7.35: L1 / L2 / L5 / L6 的判据全部下沉到 ``pandaone.health_probe`` ——
+    **与 doctor 共用同一份**。历史上这两个命令各写各的判据，已经漂移过三次：
+
+      1. L1 传空 config → ``config.get("protected_extensions", [".py"])``
+         永远拿到默认的 ``[".py"]`` → 631 个受保护文件在仪表盘上完全不可见。
+      2. L2 只查 PID 存活 → 看门狗被强杀后 PID 残留，而 PID 会被系统回收
+         复用 → 别的进程拿到同一个 PID → 假绿。
+      3. L5 直接比 hash、丢掉 form → pip 版与 exe 版共存（合法部署行为）时
+         误报"不匹配"。
+
+    三态语义（与 doctor 一致）：na（未启用）/ ok / fail；
+    **fail 会让退出码变成 3**（与 doctor 的层级失败退出码一致），便于脚本判断。
+    """
+    from pandaone import health_probe as _hp
+
     root = Path(args.root).resolve()
     pandaone_dir = root / ".pandaone"
     if not pandaone_dir.exists():
@@ -216,68 +215,81 @@ def cmd_status(args):
     print("=" * 64)
     print(t("status_header", root=root))
     print("=" * 64)
-    protected_files = _iter_protected_files(root, {})
-    if protected_files:
-        locked = sum(1 for p in protected_files if not (p.stat().st_mode & stat.S_IWUSR))
-        unlocked = len(protected_files) - locked
-        print(t("status_l1"))
-        print(t("status_total", n=len(protected_files)))
-        print(t("status_locked_unlocked", n=locked, m=unlocked))
-    # v0.7.15 fix: L2 watchdog 区块。i18n key (status_l2/status_watch_on/
-    # status_watch_off) 早已存在，但实现一直没接上（RED 测试悬空）。
+
+    #: FAIL 态的层（决定退出码）；na 态（未启用）不算失败。
+    failed = []
+
+    def _show(st):
+        """按三态打印一行状态。"""
+        state = st.get("state")
+        if state == _hp.OK:
+            print(t("status_state_ok", note=st.get("note", "")))
+        elif state == _hp.NA:
+            print(t("status_state_na", note=st.get("note", "")))
+        elif state == _hp.WARN:
+            print(t("status_state_warn", note=st.get("note", "")))
+        else:
+            print(t("status_state_fail", note=st.get("note", "")))
+
+    # ---------------- L1 文件锁 ----------------
+    print(t("status_l1"))
+    l1 = _hp.file_lock_state(root)
+    _show(l1)
+    if l1["state"] == _hp.FAIL:
+        failed.append("L1")
+    if l1.get("total"):
+        print(t("status_total", n=l1["total"]))
+        print(t("status_locked_unlocked", n=l1.get("locked", 0), m=l1.get("writable", 0)))
+
+    # ---------------- L2 watchdog ----------------
     print()
     print(t("status_l2"))
-    pid_path = pandaone_dir / ".watchdog_pid"
-    if pid_path.exists():
-        pid_text = pid_path.read_text(encoding="utf-8").strip()
-        if _pid_alive(pid_text):
-            print(t("status_watch_on", pid=pid_text))
-        else:
-            print(t("status_watch_off"))
-    else:
+    l2 = _hp.watchdog_state(root)
+    if l2["state"] == _hp.OK:
+        print(t("status_watch_on", pid=l2.get("pid", "")))
+    elif l2["state"] == _hp.NA:
         print(t("status_watch_off"))
+    else:
+        # 跑过但坏了：进程不在，或 PID 被别的进程复用（假绿）
+        print(t("status_state_fail", note=l2.get("note", "")))
+        failed.append("L2")
+
+    # ---------------- L5 自指纹 ----------------
     print()
     print(t("status_l5"))
-    if FP_PATH.exists():
-        current = compute_fingerprint()
-        # v0.7.22 fix: FP_PATH 自 v0.7.21.2 起是 json {version, hash, stored_at},
-        # 这里之前直接拿整段文本跟 hex digest 比 → 永远不相等 → status 永远误报
-        # "指纹不匹配"。改用 _load_fp() 统一解析 (兼容旧裸 hex)。
-        stored = ""
-        try:
-            _ver, stored, _migrated = _load_fp()
-        except Exception:
-            stored = FP_PATH.read_text(encoding="utf-8").strip()
-        if stored == current:
-            print(t("status_fp_ok", fp=stored[:16]))
-        else:
-            print(t("status_fp_mismatch", stored=stored[:16], current=current[:16]))
-    else:
+    l5 = _hp.fingerprint_state()
+    if l5["state"] == _hp.OK:
+        print(t("status_fp_ok", fp=str(l5.get("current", ""))[:16]))
+    elif l5["state"] == _hp.WARN:
+        # 形态切换 / 版本升级 = 合法部署行为，不是篡改
+        print(t("status_fp_switch", note=l5.get("note", "")))
+    elif l5["state"] == _hp.NA:
         print(t("status_fp_uninit"))
+    else:
+        print(t("status_fp_tampered", note=l5.get("note", "")))
+        failed.append("L5")
+
+    # ---------------- 审计统计 ----------------
     print()
-    audit_path = pandaone_dir / "pandaone.jsonl"
     print(t("status_audit_stats"))
+    audit = _hp.audit_state(root)
+    audit_path = pandaone_dir / "pandaone.jsonl"
     if audit_path.exists():
-        records = []
-        for line in audit_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        total = len(records)
-        print(t("status_total_records", n=total))
+        print(t("status_total_records", n=audit.get("total", 0)))
         # v0.7.15 fix (Bug #17): 状态计数用本地化标签，不再裸输出 APPROVED 等
-        n_approved = sum(1 for r in records if r.get("status") == "APPROVED")
-        n_rejected = sum(1 for r in records if r.get("status") == "REJECTED")
-        n_unauth = sum(1 for r in records if r.get("status") == "UNAUTHORIZED")
-        if n_approved:
-            print(t("status_count_approved", n=n_approved))
-        if n_rejected:
-            print(t("status_count_rejected", n=n_rejected))
-        if n_unauth:
-            print(t("status_count_unauthorized", n=n_unauth))
+        if audit.get("approved"):
+            print(t("status_count_approved", n=audit["approved"]))
+        if audit.get("rejected"):
+            print(t("status_count_rejected", n=audit["rejected"]))
+        if audit.get("unauthorized"):
+            print(t("status_count_unauthorized", n=audit["unauthorized"]))
+    if audit["state"] == _hp.FAIL:
+        print(t("status_state_fail", note=audit.get("note", "")))
+        failed.append("L6")
+
     print()
     print("=" * 64)
+    if failed:
+        print(t("status_failed_layers", layers=", ".join(failed)))
+        return 3
     return 0

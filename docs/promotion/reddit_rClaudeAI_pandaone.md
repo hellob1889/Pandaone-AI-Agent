@@ -20,7 +20,7 @@ That's the gap this tool closes.
 
 ## What it does
 
-Pandaone Guard is an MCP server with 11 tools. The core loop:
+Pandaone Guard is an MCP server with 12 tools. The core loop:
 
 1. AI wants to modify a file → calls `pandaone_write <file> --problem "..." --reason "..." --approach "..."`
 2. Tool appends a JSONL audit record
@@ -96,7 +96,7 @@ Wire into Claude Code / Cursor / Trae:
 
 ## Numbers
 
-- 11 MCP tools (annotations all 4 hints filled)
+- 12 MCP tools (annotations all 4 hints filled)
 - 15 tests, 100% coverage of MCP server
 - M8ven Trust Index: **100/100, A grade, Verified Publisher, Live Monitored**
 - 137 KB wheel

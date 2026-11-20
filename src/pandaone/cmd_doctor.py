@@ -105,6 +105,13 @@ import subprocess as _subprocess
 import sys as _sys
 from pathlib import Path as _Path
 
+# v0.7.35: status / doctor 共用的健康判据（单一事实源）。
+#   L1 / L2 / L5 / L6 的判定全部下沉到 health_probe —— 历史上这两个命令
+#   各写各的判据，已经漂移过三次（L1 少算 631 个文件、L2 PID 复用假绿、
+#   L5 丢 form 字段误报）。放在这里 import 是安全的：health_probe 顶层
+#   只依赖标准库，不 import cli（无循环依赖）。
+from pandaone import health_probe as _hp
+
 
 # ============================================================
 # 0. 通用工具
@@ -204,62 +211,25 @@ def _find_readme(root: _Path):
 def _process_name(pid):
     """返回 pid 对应进程的**进程名**；查不到返回 None。
 
-    Windows: tasklist /FI "PID eq N" /FO CSV /NH
-    POSIX  : /proc/<pid>/comm（取不到再退回 psutil）
-
-    为什么需要它（S5）:
-      L2 原来只看"PID 还活着"。看门狗被强杀后 pid 文件残留，
-      而 PID 会被系统回收复用 —— 别的进程（比如浏览器）拿到了同一个 PID，
-      _pid_alive 返回 True → L2 假绿。只有"进程名也像看门狗"才算真活着。
+    v0.7.35: 实现已下沉到 health_probe.process_name ——
+    status 与 doctor 必须用同一套"这个进程是不是看门狗"的判定，
+    否则 PID 复用假绿会在两个命令之间再次漂移（历史上已经漂移过一次）。
     """
-    try:
-        pid = int(str(pid).strip())
-    except Exception:
-        return None
-    if pid <= 0:
-        return None
-    if _sys.platform.startswith("win"):
-        try:
-            r = _subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=15,
-            )
-        except Exception:
-            return None
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if not line or line.upper().startswith("INFO:"):
-                continue
-            parts = [p.strip().strip('"') for p in line.split(",")]
-            if len(parts) >= 2 and parts[1] == str(pid):
-                return parts[0]
-        return None
-    try:
-        comm = _Path(f"/proc/{pid}/comm")
-        if comm.exists():
-            return comm.read_text(encoding="utf-8", errors="replace").strip()
-    except Exception:
-        pass
-    try:
-        import psutil
-        return psutil.Process(pid).name()
-    except Exception:
-        return None
+    return _hp.process_name(pid)
 
 
 def _process_cmdline(pid) -> str:
-    """返回 pid 的命令行（仅 POSIX 有 /proc）；拿不到返回空串。"""
-    try:
-        pid = int(str(pid).strip())
-        raw = _Path(f"/proc/{pid}/cmdline").read_bytes()
-    except Exception:
-        return ""
-    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+    """返回 pid 的命令行（仅 POSIX 有 /proc）；拿不到返回空串。
+
+    v0.7.35: 实现已下沉到 health_probe.process_cmdline。
+    """
+    return _hp.process_cmdline(pid)
 
 
 def _watchdog_process_verdict(name):
     """判断进程名是不是 pandaone 看门狗。
+
+    v0.7.35: 实现已下沉到 health_probe.watchdog_process_verdict。
 
     返回 (verdict, detail)：
       'ok'      —— 明确是 pandaone 进程
@@ -271,15 +241,7 @@ def _watchdog_process_verdict(name):
     单看名字分不出来 —— 这种情况下要靠 /proc/<pid>/cmdline 补证，
     补不到就只提示"无法核实"，绝不误报（误报一次，用户就不信 doctor 了）。
     """
-    n = (name or "").strip().lower()
-    if not n:
-        return "unknown", ""
-    if "pandaone" in n:
-        return "ok", n
-    stem = n[:-4] if n.endswith(".exe") else n
-    if stem in ("python", "pythonw", "python3", "python3w", "py"):
-        return "unknown", n
-    return "reused", n
+    return _hp.watchdog_process_verdict(name)
 
 
 # ============================================================
@@ -287,64 +249,27 @@ def _watchdog_process_verdict(name):
 # ============================================================
 
 def _check_layer1_file_lock(root: _Path) -> dict:
-    """v0.7.34.0: L1 真检 —— 受保护文件是不是**真的**被锁成只读。
+    """L1 真检 —— 受保护文件是不是**真的**被锁成只读。
 
-    之前是硬编码字面量 {"ok": True, "note": "python-only (attrib/chmod)"} ——
-    无条件 True，锁没锁、锁了多少完全看不出来。
+    v0.7.35: 判据已下沉到 health_probe.file_lock_state（与 status 共用同一份）。
 
-    复用点:
-      - 枚举: pandaone.cli._iter_protected_files
-        （= cli_chunks/part_003.py 的实现，按 config 的 protected_extensions
-          + exclude_patterns 过滤）
-      - 计数算法: cli_chunks/part_004.py cmd_status 的 locked/unlocked 统计
-        （用 st_mode & stat.S_IWUSR 判定，不用 os.access —— root 下 os.access
-          对 444 文件也返回 True，L1 锁对 root 等于没有）
+    为什么必须共用（这是第三次漂移）：
+      status 原来传空 config → ``config.get("protected_extensions", [".py"])``
+      永远拿到默认的 ``[".py"]`` → 631 个受保护文件在仪表盘上完全不可见。
+      两处各写一遍判据 = 迟早再漂移一次，所以把判定收敛到单一落点。
 
-    v0.7.34.0 R2 三态:
+    三态:
       - 从没跑过 lock（没有 .pandaone/lock_modes.json）→ N/A，不是失败
       - 零受保护文件（没有可保护的东西）→ N/A，不是失败
       - 跑过 lock 但文件又可写了 → FAIL（这才是真的坏了）
     """
-    config_path = root / ".pandaone" / "config.json"
-    config = {}
-    if config_path.exists():
-        data, err = _read_json(config_path)
-        if err:
-            return _layer(False, f"config.json {err}")
-        if isinstance(data, dict):
-            config = data
-    else:
-        # 没 init 过: 用项目默认保护范围兜底
-        config = {
-            "protected_extensions": [".py"],
-            "exclude_patterns": ["__pycache__", "*.pyc", ".git", ".pandaone"],
-        }
-    try:
-        from pandaone.cli import _iter_protected_files
-    except Exception as e:
-        return _layer(False, f"protected-file enumerator unavailable: {e}")
-    try:
-        files = _iter_protected_files(root, config)
-    except Exception as e:
-        return _layer(False, f"protected-file scan failed: {e}")
-    total = len(files)
-    writable = 0
-    for p in files:
-        try:
-            if p.stat().st_mode & _stat.S_IWUSR:
-                writable += 1
-        except OSError:
-            continue
-    # R2-3: 零受保护文件 = 没有可保护的东西 → N/A（原来落进 else 判 FAIL）
-    if total == 0:
-        return _na_layer("N/A - no protected files in this project (nothing to lock)")
-    # R2-2: 从没跑过 lock → 该层"未启用" → N/A，不计入失败
-    lock_modes = root / ".pandaone" / "lock_modes.json"
-    if not lock_modes.exists():
-        return _na_layer("N/A - lock never applied (no .pandaone/lock_modes.json)")
-    if writable == 0:
-        return _layer(True, f"{total}/{total} protected files locked (read-only)")
-    return _layer(False, f"{writable}/{total} protected files writable")
+    st = _hp.file_lock_state(root)
+    state = st["state"]
+    if state == _hp.NA:
+        return _na_layer(st["note"])
+    if state == _hp.OK:
+        return _layer(True, st["note"])
+    return _layer(False, st["note"])
 
 
 def _check_layer2_watchdog(root: _Path) -> dict:
@@ -405,27 +330,14 @@ def _check_layer2_watchdog(root: _Path) -> dict:
         problems.append(f"baseline commit probe failed: {e}")
 
     # (4) watchdog 进程存活（R2-5: 还要校验进程名，防 PID 复用假绿）
-    if not pid_path.exists():
-        problems.append("watchdog NOT running (no .watchdog_pid)")
-    else:
-        try:
-            pid_text = pid_path.read_text(encoding="utf-8").strip()
-        except Exception as e:
-            pid_text = ""
-            problems.append(f"watchdog pid file unreadable: {e}")
-        if pid_text:
-            try:
-                from pandaone.cli import _pid_alive
-                alive = bool(_pid_alive(pid_text))
-            except Exception as e:
-                alive = False
-                problems.append(f"pid liveness probe failed: {e}")
-            if alive:
-                n_ok, n_bad = _watchdog_alive_notes(pid_text)
-                notes.extend(n_ok)
-                problems.extend(n_bad)
-            else:
-                problems.append(f"watchdog process NOT alive (pid {pid_text})")
+    #     v0.7.35: 判据已下沉到 health_probe.watchdog_state —— status 用的是
+    #     同一份，避免"进程死了 / PID 被复用"在两个命令上给出不同结论
+    #     （status 原来只查 PID 存活 → PID 被系统回收复用后假绿）。
+    wd = _hp.watchdog_state(root)
+    if wd["state"] == _hp.FAIL:
+        problems.append(wd["note"])
+    elif wd["state"] == _hp.OK:
+        notes.append(wd["note"])
 
     # (5) 冻结形态: 看门狗 exe 必须在 pandaone.exe 同级
     if getattr(_sys, "frozen", False):
@@ -444,23 +356,13 @@ def _check_layer2_watchdog(root: _Path) -> dict:
 def _watchdog_alive_notes(pid_text):
     """PID 还活着时，校验"这个进程确实是看门狗"（S5: 防 PID 复用假绿）。
 
+    v0.7.35: 实现已下沉到 health_probe.watchdog_alive_notes。
+
     返回 (notes, problems) 两个列表：
       - 进程名明确不是看门狗 → problems 非空（PID 被复用 → 假绿 → 判 FAIL）
       - 名字不足以判断（源码形态是 python.exe）→ 只放 notes，**不**判失败
     """
-    name = _process_name(pid_text)
-    verdict, detail = _watchdog_process_verdict(name)
-    if verdict == "reused":
-        return ([], [f"watchdog pid {pid_text} reused by unrelated process ({detail})"])
-    if verdict == "ok":
-        return ([f"watchdog alive (pid {pid_text}, {detail})"], [])
-    # unknown: 名字不足以判断（源码形态是 python.exe）→ 用 /proc 补证
-    cmdline = _process_cmdline(pid_text)
-    if "pandaone" in cmdline.lower():
-        return ([f"watchdog alive (pid {pid_text}, {detail or 'python'})"], [])
-    if detail:
-        return ([f"watchdog alive (pid {pid_text}, process name {detail} not verifiable)"], [])
-    return ([f"watchdog alive (pid {pid_text})"], [])
+    return _hp.watchdog_alive_notes(pid_text)
 
 
 def _probe_install_hook_module():
@@ -626,7 +528,9 @@ def _check_layer4_startup(root: _Path) -> dict:
 
 
 def _check_layer5_self_fingerprint(root: _Path) -> dict:
-    """v0.7.34.0: L5 不误报 —— 先比 form，再比 hash。
+    """L5 不误报 —— 先比 form，再比 hash。
+
+    v0.7.35: 判据已下沉到 health_probe.fingerprint_state（与 status 共用同一份）。
 
     之前比对时**丢掉了 form 字段**直接比 hash → 同一台机器既装了 pip 版又装了
     exe 版时（合法部署行为），doctor 会误报 "TAMPERED"，用户会以为工具被篡改
@@ -640,103 +544,43 @@ def _check_layer5_self_fingerprint(root: _Path) -> dict:
     v0.7.34.0 R2: L5 是**机器级**的（指纹文件在用户主目录，不在项目里），
     沿用既有语义不变。
     """
-    try:
-        from pandaone.cli import compute_fingerprint, FP_PATH
-        from pandaone import fp_security as _fpsec
-    except Exception as e:
-        return _layer(False, f"fingerprint module import failed: {e}")
-    if not FP_PATH.exists():
-        return _layer(False, "no stored fingerprint (baseline missing)")
-    try:
-        rec = _fpsec.load_fp_record(path=FP_PATH)
-    except Exception as e:
-        return _layer(False, f"fingerprint file corrupted: {e}")
-    try:
-        current = compute_fingerprint()
-    except Exception as e:
-        return _layer(False, f"compute fingerprint failed: {e}")
-
-    stored_form = rec.get("form") or _fpsec.FORM_SOURCE
-    current_form = _fpsec.fp_form()
-    if stored_form != current_form:
-        # 形态切换是合法部署行为，不是篡改 —— 只 WARN，不报 TAMPERED
-        return _layer(
-            True,
-            f"form switched (stored={stored_form}, current={current_form}) - baseline not comparable",
-            warn=True,
-        )
-
-    stored_version = rec.get("version", "unknown")
-    try:
-        from pandaone.cli import _get_pandaone_version
-        current_version = _get_pandaone_version()
-    except Exception:
-        current_version = None
-    if current_version and stored_version and stored_version != current_version:
-        # 版本变了 = 升级（CLI 自己的 check_fingerprint 也会 auto-refresh），不是篡改
-        return _layer(
-            True,
-            f"version changed (stored=v{stored_version}, current=v{current_version}) - baseline not comparable",
-            warn=True,
-        )
-
-    if rec.get("hash") == current:
-        return _layer(True, f"matches stored fingerprint (v{stored_version}, form={current_form})")
-    return _layer(False, f"TAMPERED (stored v{stored_version} != current SHA256)")
+    st = _hp.fingerprint_state()
+    state = st["state"]
+    if state == _hp.NA:
+        return _na_layer(st["note"])
+    if state == _hp.WARN:
+        # 形态切换 / 版本升级 = 合法部署行为，不是篡改 —— 只 WARN，不报 TAMPERED
+        return _layer(True, st["note"], warn=True)
+    if state == _hp.OK:
+        return _layer(True, st["note"])
+    return _layer(False, st["note"])
 
 
 def _check_layer6_tamper_detection(root: _Path) -> dict:
-    """v0.7.34.0: L6 三态计数 —— APPROVED / REJECTED / UNAUTHORIZED。
+    """L6 三态计数 —— APPROVED / REJECTED / UNAUTHORIZED。
+
+    v0.7.35: 判据已下沉到 health_probe.audit_state（与 status 共用同一份）。
 
     之前只 count('"APPROVED"') / count('"REJECTED"')，**漏掉 UNAUTHORIZED**
     —— 而那才是 watchdog 抓到的真篡改（pandaone_guard/__main__.py 写的就是
-    这个状态）。计数法照抄 cli_chunks/part_004.py cmd_status 的逐行 JSON 解析。
+    这个状态）。
 
-    v0.7.34.0 R2 三态:
+    三态:
       - 从没有审计记录（没有日志 / 日志为空）→ N/A（不是"坏了"）
       - 日志被删（项目已 init 却没有日志）→ FAIL（基线缺失）
       - 有记录且含 UNAUTHORIZED → FAIL（真篡改）
     """
-    root_log = root / ".pandaone" / "pandaone.jsonl"
-    root_cfg = root / ".pandaone" / "config.json"
-    if root_log.exists():
-        audit_log = root_log
-    elif root_cfg.exists():
-        # 项目已 init（config.json 在）却没有审计日志 = 审计基线被删
-        return _layer(False, "audit log NOT found (audit baseline deleted)")
-    else:
-        # v0.7.24: 打包成 .exe 之后项目目录里没有 .pandaone/，回落到包目录的日志，
-        #   只查包目录永远显示 "clean state"，会把真实信号掩盖掉。
-        pkg_root = _Path(__file__).resolve().parent.parent.parent
-        pkg_log = pkg_root / ".pandaone" / "pandaone.jsonl"
-        if not pkg_log.exists():
-            return _na_layer("N/A - no audit log yet (clean state)")
-        audit_log = pkg_log
-    records = []
-    try:
-        for line in audit_log.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(_json.loads(line))
-            except _json.JSONDecodeError:
-                continue
-    except Exception as e:
-        return _layer(False, f"audit read failed: {e}")
-    if not records:
-        # R2-2: 一条审计记录都没有 = 这一层从没被用过 → N/A
-        return _na_layer("N/A - audit log empty (no audit record yet)")
-    approved = sum(1 for r in records if r.get("status") == "APPROVED")
-    rejected = sum(1 for r in records if r.get("status") == "REJECTED")
-    unauthorized = sum(1 for r in records if r.get("status") == "UNAUTHORIZED")
-    note = (
-        f"audit log: {approved} APPROVED + {rejected} REJECTED "
-        f"+ {unauthorized} UNAUTHORIZED"
-    )
-    if unauthorized > 0:
-        return _layer(False, note + " (unauthorized tampering detected)")
-    return _layer(True, note)
+    # v0.7.24: 打包成 .exe 之后项目目录里没有 .pandaone/，回落到包目录的日志，
+    #   只查包目录永远显示 "clean state"，会把真实信号掩盖掉。
+    pkg_root = _Path(__file__).resolve().parent.parent.parent
+    pkg_log = pkg_root / ".pandaone" / "pandaone.jsonl"
+    st = _hp.audit_state(root, fallback=pkg_log)
+    state = st["state"]
+    if state == _hp.NA:
+        return _na_layer(st["note"])
+    if state == _hp.OK:
+        return _layer(True, st["note"])
+    return _layer(False, st["note"])
 
 
 def _check_layer7_ci_audit() -> dict:

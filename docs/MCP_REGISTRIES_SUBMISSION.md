@@ -214,8 +214,8 @@ python -m pandaone_mcp --help
    ### Trust Signals
    - M8ven Trust Index: A-grade (100/100)
    - Verified Publisher + Live Monitored
-   - 11/11 tools declare full MCP annotations (OpenAI directory compliant)
-   - 11/11 tools have direct tests
+   - 12/12 tools declare full MCP annotations (OpenAI directory compliant)
+   - 12/12 tools have direct tests
    
    ### Why it matters
    In the era of AI-generated code, audit trail = compliance. pandaone is the only MCP
@@ -347,7 +347,7 @@ pythonRequired: '>=3.8'
 
 **我能保证的是**：
 
-1. ✅ **OpenAI directory 合规性**：11/11 tools 都有完整 annotations（PR #44 修复）
+1. ✅ **OpenAI directory 合规性**：12/12 tools 都有完整 annotations（PR #44 修复）
 2. ✅ **PyPI 可装**：`pip install pandaone-guard==0.7.14` 全球可达
 3. ✅ **MCP 协议合规**：stdio JSON-RPC 2.0 transport（OpenAI / Claude Desktop / Cursor 都支持）
 4. ✅ **材料完整**：本文档提供了所有 4 个 registry 的提交材料 + ChatGPT 端用户接入文档
