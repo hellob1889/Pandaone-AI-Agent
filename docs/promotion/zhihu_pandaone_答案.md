@@ -128,7 +128,7 @@ ChatGPT 直连（Developer Mode）也支持，README 有 5 步指引。
 ## 现在能用的版本
 
 - **v0.7.14** 已发布 PyPI
-- 11 个 MCP 工具（annotations 全齐）
+- 12 个 MCP 工具（annotations 全齐）
 - 15 个测试，100% 覆盖 MCP server
 - M8ven Trust Index **100/A**（Verified Publisher + Live Monitored）
 - 137 KB wheel，pip 一键装

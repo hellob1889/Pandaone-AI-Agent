@@ -1,3 +1,71 @@
+## [0.7.35.0] - 2026-11-21
+
+**让 `status` 与 `doctor` 用同一套判据 —— 结束"两个命令各说各话"的三次漂移。**
+
+### Fixed: status 的仪表盘一直在说谎
+
+`pandaone status`（仪表盘）与 `pandaone doctor`（自检）回答**同一组问题**，
+但两个命令各写各的判据，已经漂移过三次：
+
+| 层 | status 的旧判据 | 实际后果 |
+|---|---|---|
+| L1 文件锁 | 传**空 config** → `config.get("protected_extensions", [".py"])` 永远拿到默认 `[".py"]` | 631 个受保护文件在仪表盘上**完全不可见**（只显示 .py） |
+| L2 看门狗 | 只查"PID 还活着" | 看门狗被强杀后 PID 残留，而 PID 会被系统回收复用 → 别的进程拿到同一个 PID → **假绿** |
+| L5 自指纹 | 直接比 hash、**丢掉 form 字段** | pip 版与 exe 版共存（合法部署行为）时误报"不匹配"，用户不再信任自检 |
+
+**根因不是"忘了同步"，而是没有共享判据的落点** —— 每加一层就要在两处各写一遍，
+第三次漂移只是时间问题。
+
+### Added: 共享判据模块 `pandaone.health_probe`
+
+- `file_lock_state` / `watchdog_state` / `fingerprint_state` / `audit_state`
+  四个判据各写**一次**，`status` 与 `doctor` 都从这里取。
+- 三态语义统一：`na`（从未启用）/ `ok` / `fail`（另有 `warn`：形态切换、版本升级）。
+- `status` 现在也按三态展示，并且**层失败时退出码为 3**（与 doctor 一致），
+  脚本 / CI 可直接判断。
+- `cli._iter_protected_files` / `cli._pid_alive` 改为转发到共享模块
+  （保留原函数名，既有调用点不动）。
+
+### Fixed: `install_hook` 谎报"已复制"
+
+- 原来复制是**条件执行**（`if CHECK_SCRIPT.exists():`），打印却是**无条件** ——
+  依赖缺失时用户照样看到"[OK] pre-commit-check.py 已复制"，而文件根本没拷过去。
+  那不是显示瑕疵，是**谎报**：用户以为 L3 门禁已就位，实际 hook 一跑就炸。
+- 现在：依赖缺失 / 复制失败 / hook 写入失败 → 显式报错并 **return 1**；
+  只有**真的复制成功**才打印"已复制"。
+
+### Added: MCP 新增 `pandaone_doctor` 工具
+
+原来 Agent 只能看到 `pandaone_status`（有盲区）→ 拿不到"真坏在哪"，
+容易把"仪表盘正常"当成"系统正常"。
+新增 `pandaone_doctor`（调 `doctor --json`，stdout 为**单一** JSON 文档），
+Agent 可直接解析 `failed_layers`。MCP 工具数 11 → 12。
+
+### 验证（故障注入 —— 测试要能失败，不只是绿）
+
+新增 `tests/test_health_probe_alignment.py`（19 条），每个用例都先把环境**弄坏**
+再断言对应层真的报 FAIL：
+
+| 故障注入 | 期望 | 结果 |
+|---|---|---|
+| 锁被解除（文件又可写） | status exit 3 + doctor L1 FAIL | ✅ |
+| PID 指向非 pandaone 进程（Windows `cmd.exe` / POSIX `sleep`） | L2 FAIL（reused） | ✅ |
+| PID 文件在、进程已死 | 绝不能报"运行中" | ✅ |
+| 指纹 hash 变了（同版本同形态） | L5 FAIL（TAMPERED）+ status exit 3 | ✅ |
+| 指纹 form 切换 | 只 WARN，不算失败，exit 0 | ✅ |
+| install_hook 依赖缺失 / 复制报错 | return 1 且**不**打印"已复制" | ✅ |
+
+**反向验证**（`work/_verify_negative_v035.py`）：把两个关键文件换成
+**git HEAD 的修复前产物**再跑测试 ——
+
+- `part_004.py` 回退 → 输出 `总受保护文件: 1`（只数 .py），断言 `1 >= 3` **变红** ✅
+- `install_hook.py` 回退 → 打印"[OK] pre-commit-check.py 已复制"且 rc=0，**变红** ✅
+
+> 复核记录：第一版反向验证手写"回退片段"，结果出现"回退后仍绿"的假象 ——
+> 复核发现手写片段**没有完整还原旧结构**（旧代码里 `shutil.copy` 是包在
+> `if ...exists():` 里的，没有独立 try/except），恰好仍满足断言。
+> **教训：反向验证必须用真实的前一版产物（git HEAD），否则验证的是"你手写的回退"。**
+
 ## [0.7.34.4] - 2026-11-02
 
 **把审计防线从「查路径」升级为「查内容」—— 堵住"一次旧审批永久放行任意后续改写"的漏洞。**

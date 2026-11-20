@@ -23,7 +23,7 @@ The audit log is just JSONL appended to `.pandaone/pandaone.jsonl`. You can grep
 
 ## The MCP tool surface
 
-11 tools, all annotated per the MCP spec:
+12 tools, all annotated per the MCP spec:
 
 | Tool | readOnly | destructive | idempotent | openWorld |
 |---|---|---|---|---|

@@ -36,7 +36,7 @@ When something breaks in production three months later, you're guessing. That gu
 
 ## What Pandaone Guard does
 
-Pandaone Guard is an MCP (Model Context Protocol) server that adds **11 tools** your AI agent can call. The core loop:
+Pandaone Guard is an MCP (Model Context Protocol) server that adds **12 tools** your AI agent can call. The core loop:
 
 1. AI wants to modify a file
 2. AI calls `pandaone_write <file> --reason "..." --problem "..." --approach "..."`
@@ -117,7 +117,7 @@ TOOLS = [
 ]
 ```
 
-All 11 tools expose the four MCP-standard annotation hints. This was the change that took M8ven's trust score from 74 to 100 — turns out MCP directories *require* these hints for inclusion.
+All 12 tools expose the four MCP-standard annotation hints. This was the change that took M8ven's trust score from 74 to 100 — turns out MCP directories *require* these hints for inclusion.
 
 ---
 

@@ -317,9 +317,9 @@ pandaone serve   # 浏览器打开 http://localhost:8765
 }
 ```
 
-暴露 **11 个工具**：`pandaone_init` / `pandaone_lock` / `pandaone_unlock` / `pandaone_write` / `pandaone_log` / `pandaone_status` / `pandaone_install_hook` / `pandaone_watch` / `pandaone_install_git` / `pandaone_fingerprint_update` / `pandaone_ci`
+暴露 **12 个工具**：`pandaone_init` / `pandaone_lock` / `pandaone_unlock` / `pandaone_write` / `pandaone_log` / `pandaone_status` / `pandaone_doctor` / `pandaone_install_hook` / `pandaone_watch` / `pandaone_install_git` / `pandaone_fingerprint_update` / `pandaone_ci`
 
-**所有 11 个工具都已声明完整的 4 个 MCP annotations**（`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`）—— **OpenAI 目录合规**（v0.7.14 修复）。
+**所有 12 个工具都已声明完整的 4 个 MCP annotations**（`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`）—— **OpenAI 目录合规**（v0.7.14 修复）。
 
 #### 在 ChatGPT 中使用 / Use with ChatGPT
 
@@ -615,7 +615,7 @@ pandaone write \
 }
 ```
 
-Exposes 11 tools for AI agents (Claude / Cursor / Trae).
+Exposes 12 tools for AI agents (Claude / Cursor / Trae).
 
 **All 11 tools declare the full set of 4 MCP annotations** (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`) — **OpenAI directory compliant** (fixed in v0.7.14).
 

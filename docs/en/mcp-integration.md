@@ -40,7 +40,7 @@ or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 }
 ```
 
-## 11 Tools Exposed
+## 12 Tools Exposed
 
 | Tool | Purpose |
 |---|---|

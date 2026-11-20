@@ -176,6 +176,21 @@ TOOLS = [
         },
     },
     {
+        "name": "pandaone_doctor",
+        "description": "系统健康自检（git / Python / 8 层防御真检，三态 na/ok/fail）。status 与 doctor 共用同一份判据，doctor 额外做可执行性检查：hook 归属/行尾/BOM、watchdog PID 复用、指纹形态切换、审计基线缺失。层失败时退出码为 3",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"root": {"type": "string", "default": "."}},
+            "required": ["root"],
+        },
+        "annotations": {
+            "readOnlyHint": True,          # pure diagnostics (no writes)
+            "destructiveHint": False,
+            "idempotentHint": True,        # same root → same report
+            "openWorldHint": False,        # only reads project + machine state
+        },
+    },
+    {
         "name": "pandaone_install_hook",
         "description": "安装/卸载 pre-commit hook",
         "inputSchema": {
@@ -413,6 +428,12 @@ HANDLERS = {
     ])] + (["--rejected"] if p.get("rejected") else []) +
        (["--unauthorized"] if p.get("unauthorized") else []), timeout=30),
     "pandaone_status": lambda p: _run_cli(["status", *_args_from(p, [("root", "--root")])]),
+    # v0.7.35: 新增 doctor 工具 —— 原来 Agent 只能看到 status（有盲区），
+    #   看不到"真坏在哪"。doctor 与 status 现在共用 health_probe 的判据，
+    #   但 doctor 额外做可执行性检查（hook 归属/CRLF/BOM、watchdog PID 复用…）。
+    #   用 --json：stdout 只有一个 JSON 文档，机器端可直接解析。
+    "pandaone_doctor": lambda p: _run_cli(
+        ["doctor", "--json", *_args_from(p, [("root", "--root")])], timeout=60),
     "pandaone_install_hook": lambda p: _run_cli(
         ["install-hook", *_args_from(p, [("root", "--root"), ("uninstall", "--uninstall")])]),
     "pandaone_watch": lambda p: _run_cli(

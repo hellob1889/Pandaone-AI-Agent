@@ -59,6 +59,15 @@ pandaone status [--root PATH]
 
 Shows: L1 lock, L2 watchdog, L5 fingerprint, audit stats, recent audits, Phase 5 binary snapshots.
 
+**Tri-state semantics** (v0.7.35 — `status` and `doctor` now share **one** source of truth):
+- `[N/A]` the layer was never enabled (not a failure)
+- `[OK]` configured and passing
+- `[WARN]` passing but the baseline is not comparable (e.g. source vs frozen form)
+- `[FAIL]` configured but broken (lock released, watchdog PID reused, fingerprint tampered)
+
+Exit codes: `0` = healthy; `1` = project not initialized; `3` = at least one layer is `[FAIL]`
+(same semantics as `doctor`).
+
 ## install-hook — Install L3 pre-commit hook
 
 ```bash
@@ -109,7 +118,7 @@ source no longer hard-codes a privileged password.
 
 `pandaone-mcp` — Start MCP server (stdio JSON-RPC).
 
-Exposes 11 tools for AI Agents (Claude / Cursor / Trae).
+Exposes 12 tools for AI Agents (Claude / Cursor / Trae).
 
 See [MCP Integration](mcp-integration.md).
 

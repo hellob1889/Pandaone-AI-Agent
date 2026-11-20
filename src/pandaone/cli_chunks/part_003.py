@@ -1,61 +1,17 @@
 # cli.py chunk 3/6: lines 729-1201
 def _iter_protected_files(root: Path, config: dict) -> list[Path]:
     """
-    Bug #2 fix: 共享 helper — 列出项目根目录下所有受保护扩展名的文件。
+    共享 helper — 列出项目根目录下所有受保护扩展名的文件。
 
     被 cmd_status（仪表盘）、_apply_readonly（lock/unlock）、cmd_ci 等共用。
-    之前 cmd_status 只看 *.py，忽略了 18 种其它受保护扩展名（.json, .yaml, .env 等），
-    导致 status 报告的"锁定文件数"严重低估，用户看不到 L1 锁的真实覆盖。
 
-    参数：
-      - root: 项目根目录
-      - config: 项目配置 dict（含 protected_extensions + exclude_patterns）
-
-    返回：受保护文件路径列表（排除 __pycache__、.git、exclude_patterns 等）
+    v0.7.35: 实现已下沉到 pandaone.health_probe.iter_protected_files ——
+    status 与 doctor 必须用同一份枚举，否则两个命令会给出不同的"受保护文件数"
+    （历史上 status 传空 config → 只数 .py，631 个文件在仪表盘上不可见）。
+    这里的函数保留是为了不改动既有调用点（lock / ci / 第三方脚本）。
     """
-    import fnmatch
-
-    protected_exts = set(config.get("protected_extensions", [".py"]))
-    exclude_patterns = config.get("exclude_patterns", [])
-
-    files = []
-    seen = set()
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        # v0.7.34.0 M1: desktop.ini 是 Windows 的目录图标配置文件
-        #   （Explorer / 系统自己管理，不是用户代码），**永远不该**算受保护文件。
-        #   原因: pandaone lock 之后 apply_desktop_icon() 才写它（且必须可写），
-        #   算进去会让 doctor 的 L1 永远 FAIL —— 用户执行了开启 L1 的唯一官方
-        #   命令，doctor 反而报红且无解 → 信任崩塌。
-        #   这一层是"治本": 即使老项目的 config.json 没排除 desktop.ini，
-        #   它也不会进入受保护文件集合（init 默认值里也同时排除）。
-        if p.name.lower() == "desktop.ini":
-            continue
-        if p in seen:
-            continue
-        if _effective_suffix(p) not in protected_exts:
-            continue
-        seen.add(p)
-
-        # 排除判断
-        try:
-            rel = p.relative_to(root)
-        except ValueError:
-            continue
-        skip = False
-        for pat in exclude_patterns:
-            if any(fnmatch.fnmatch(part, pat) for part in rel.parts):
-                skip = True
-                break
-            if fnmatch.fnmatch(rel.name, pat):
-                skip = True
-                break
-        if skip:
-            continue
-
-        files.append(p)
-    return files
+    from pandaone.health_probe import iter_protected_files
+    return iter_protected_files(root, config)
 
 
 def _apply_readonly(args, readonly: bool) -> int:

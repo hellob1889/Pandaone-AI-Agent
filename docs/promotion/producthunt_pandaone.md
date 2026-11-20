@@ -10,13 +10,13 @@
 
 Every day, AI coding agents (Claude Code, Cursor, Trae, ChatGPT) rewrite thousands of lines of code. Git records *what* changed. Nothing records *why*.
 
-Pandaone Guard is a free, open-source MCP server that closes that gap. It gives every AI Agent 11 tools, the core one being `pandaone_write` — a forced "audit ticket" with `problem`, `reason`, and `approach` fields. A pre-commit hook then blocks any commit whose changes weren't audited.
+Pandaone Guard is a free, open-source MCP server that closes that gap. It gives every AI Agent 12 tools, the core one being `pandaone_write` — a forced "audit ticket" with `problem`, `reason`, and `approach` fields. A pre-commit hook then blocks any commit whose changes weren't audited.
 
 The result: a JSONL audit log of every AI code change, with the AI's own structured explanation of what problem it was solving and what approach it took.
 
 ### Key features
 
-- **11 MCP tools** — full coverage of the AI agent workflow (init, lock, unlock, write, log, status, install-hook, watch, install-git, fingerprint-update, ci)
+- **12 MCP tools** — full coverage of the AI agent workflow (init, lock, unlock, write, log, status, doctor, install-hook, watch, install-git, fingerprint-update, ci)
 - **6 defense layers** — protected file formats, file locks, audit log, pre-commit hook, CI verification, scheduled reconciliation. Each layer is opt-out-able
 - **Honest AI** — the AI has to lie in writing. Its lies are now permanent and searchable
 - **Local-first** — no hosted service, no telemetry, no API key, no SaaS
